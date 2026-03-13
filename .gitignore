@@ -1,0 +1,86 @@
+## .NET / C# gitignore
+
+# Build outputs
+bin/
+obj/
+out/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+# Rider
+.idea/
+*.sln.iml
+
+# VS Code
+.vscode/
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+!**/packages/repositories.config
+*.lock.json
+!package-lock.json
+
+# Publish artifacts
+**/publish/
+**/PublishProfiles/
+
+# Entity Framework migrations backup
+*.bak
+
+# User secrets
+secrets.json
+appsettings.Development.json
+appsettings.Local.json
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+*.env
+
+# Logs
+*.log
+logs/
+
+# Rider / JetBrains
+_ReSharper*/
+*.DotSettings.user
+
+# Test results
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+# Docker volumes (local dev)
+postgres-data/
+redis-data/
+
+# Uploaded files / user content (local dev)
+uploads/
+wwwroot/uploads/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Node (if React frontend used)
+node_modules/
+dist/
+.next/
+.nuxt/
