@@ -97,6 +97,31 @@
       background: var(--danger); color: #2a0a0a; border-color: var(--danger); font-weight: 600;
     }
 
+    /* "Ask" floating button */
+    #askButton {
+      position: fixed;
+      top: env(safe-area-inset-top, 8px); right: 8px;
+      background: var(--panel); color: var(--text);
+      border: 1px solid var(--border); border-radius: 999px;
+      padding: 8px 14px; font-size: 14px; cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    }
+    #askButton:active, #askButton.active { background: var(--panel-hover); color: var(--accent); }
+    #askButton.unconfigured { opacity: 0.5; }
+
+    .ai-answer {
+      margin-top: 12px; padding: 12px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      font-size: 14px; line-height: 1.5; white-space: pre-wrap;
+      max-height: 50vh; overflow-y: auto;
+    }
+    .ai-meta { font-size: 11px; color: var(--text-dim); margin-top: 6px; }
+    .ai-spinner {
+      margin-top: 12px; padding: 12px; color: var(--text-dim);
+      border: 1px dashed var(--border); border-radius: 6px;
+      font-size: 14px; text-align: center;
+    }
+
     /* photo grid (inside .modal) */
     .photo-grid {
       display: grid;
@@ -165,6 +190,7 @@
 <body>
   <canvas id="renderCanvas"></canvas>
   <div id="status">loading...</div>
+  <button id="askButton" title="Ask the master gardener">🌱 Ask</button>
   <div id="buttons">
     <button data-mode="bed">Bed</button>
     <button data-mode="plant">Plant</button>

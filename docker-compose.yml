@@ -1,11 +1,15 @@
-# OpenHarvest — Phase 3 stack: postgres + minio + redis + api.
-# Future phases will add: traefik (Phase 0+ ingress), worker (Phase 4 advisor / thumbnail jobs).
+# OpenHarvest — Phase 4 stack: postgres + redis + minio + api.
+# Future phases will add: traefik (Phase 0+ ingress), worker (Phase 4.x advisor jobs / thumbnails).
 #
 # Quick start:
 #   docker compose up --build
 #   open http://localhost:5000
 #
 # Optional: open http://localhost:9001 for the MinIO console (login openharvest/openharvest)
+#
+# AI advisor:
+#   Set CLAUDE_API_KEY in your shell/.env to enable the master gardener.
+#   Without it the API still runs; the Ask button just returns a "not configured" message.
 #
 # Resets:
 #   docker compose down -v   # nukes the postgres + minio volumes too
@@ -48,8 +52,8 @@ services:
       MINIO_ROOT_USER: openharvest
       MINIO_ROOT_PASSWORD: openharvest
     ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # web console
+      - "9000:9000"
+      - "9001:9001"
     volumes:
       - minio-data:/data
     command: server /data --console-address ":9001"
@@ -76,6 +80,7 @@ services:
       - Minio__Bucket=photos
       - Minio__UseSsl=false
       - Minio__PresignedUrlBase=http://localhost:9000
+      - AI__Claude__ApiKey=${CLAUDE_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy

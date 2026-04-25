@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using OpenHarvest.Domain.Interfaces;
+using OpenHarvest.Infrastructure.AI;
 using OpenHarvest.Infrastructure.Data;
 using OpenHarvest.Infrastructure.Storage;
 
@@ -25,6 +26,9 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.Configure<MinioOptions>(config.GetSection("Minio"));
         services.AddSingleton<IPhotoStore, MinioPhotoStore>();
+
+        services.Configure<ClaudeOptions>(config.GetSection("AI:Claude"));
+        services.AddHttpClient<IAiProvider, ClaudeProvider>();
 
         return services;
     }
