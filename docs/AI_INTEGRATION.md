@@ -1,6 +1,8 @@
 # OpenHarvest — AI Integration Guide
 
-> OpenHarvest's AI layer is designed to be provider-agnostic. You can run the full platform with Claude (Anthropic), OpenAI, or a locally-hosted Ollama model. This document explains the design and how to add or switch providers.
+> The AI layer is **Layer 3 (Advisor)** of the [layered architecture](ARCHITECTURE.md). It is the value-prove layer — the AI master gardener that reads a user's garden layout, photo timeline, and crop catalog references to generate personalized guidance.
+>
+> The Advisor is provider-agnostic. The full platform runs equally well with Claude (Anthropic), OpenAI, or a locally-hosted Ollama model. This document explains the design and how to add or switch providers.
 
 ---
 
