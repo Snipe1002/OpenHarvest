@@ -32,6 +32,16 @@ public interface IAiProvider
         string? userDescription,
         EntityContext context,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Generate a per-crop planting calendar from the user's garden context.
+    /// Each crop the user is growing gets a list of dated tasks (sow, transplant,
+    /// expected harvest window) tailored to their zone + frost dates.
+    /// </summary>
+    Task<PlantingCalendar> GeneratePlantingCalendar(
+        GardenContext context,
+        IReadOnlyList<Crop> cropCatalog,
+        CancellationToken ct = default);
 }
 
 /// <summary>The user's garden state at the moment of an AI request.</summary>
@@ -72,3 +82,26 @@ public record DiagnosisResult(
     string? Treatment,
     string Provider,
     string Model);
+
+public record PlantingCalendar(
+    string Provider,
+    string Model,
+    List<CalendarEntry> Entries,
+    string? Summary);
+
+public record CalendarEntry(
+    DateOnly Date,
+    string CropName,
+    string? CropRef,
+    CalendarTaskKind Kind,
+    string? Note);
+
+public enum CalendarTaskKind
+{
+    StartIndoors,
+    DirectSow,
+    Transplant,
+    HarvestWindowStart,
+    HarvestWindowEnd,
+    Other,
+}

@@ -42,6 +42,26 @@ public class AdvisorController : ControllerBase
         return Ok(answer);
     }
 
+    [HttpGet("calendar/{gardenId:guid}")]
+    public async Task<ActionResult<PlantingCalendar>> Calendar(Guid gardenId, CancellationToken ct)
+    {
+        var context = await BuildGardenContext(gardenId, ct);
+        // Pull only the catalog rows for slugs we're actually growing — keeps the prompt small.
+        var slugs = context.Plantings
+            .Where(p => !string.IsNullOrWhiteSpace(p.CropRef))
+            .Select(p => p.CropRef!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var crops = new List<Domain.Entities.Crop>();
+        foreach (var s in slugs)
+        {
+            var c = await _crops.GetBySlugAsync(s, ct);
+            if (c is not null) crops.Add(c);
+        }
+        var calendar = await _ai.GeneratePlantingCalendar(context, crops, ct);
+        return Ok(calendar);
+    }
+
     [HttpPost("diagnose/{gardenId:guid}/{entityId:guid}")]
     [RequestSizeLimit(50_000_000)]
     public async Task<ActionResult<DiagnosisResult>> Diagnose(
