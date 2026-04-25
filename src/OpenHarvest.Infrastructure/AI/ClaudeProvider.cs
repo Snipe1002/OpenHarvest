@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using OpenHarvest.Domain.Entities;
 using OpenHarvest.Domain.Interfaces;
 
 namespace OpenHarvest.Infrastructure.AI;
@@ -125,6 +126,112 @@ public class ClaudeProvider : IAiProvider
 
         var (diagnosis, problem, treatment) = ParseDiagnosis(text);
         return new DiagnosisResult(diagnosis, problem, treatment, Name, model);
+    }
+
+    public async Task<PlantingCalendar> GeneratePlantingCalendar(
+        GardenContext context, IReadOnlyList<Crop> cropCatalog, CancellationToken ct = default)
+    {
+        if (!IsConfigured)
+        {
+            return new PlantingCalendar(Name, "(unconfigured)", new List<CalendarEntry>(),
+                "AI advisor not configured. Set CLAUDE_API_KEY in the environment to generate a calendar.");
+        }
+
+        // Pull just the crops the user is actually growing.
+        var refSlugs = context.Plantings
+            .Where(p => !string.IsNullOrWhiteSpace(p.CropRef))
+            .Select(p => p.CropRef!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToHashSet();
+        var relevant = cropCatalog.Where(c => refSlugs.Contains(c.Slug)).ToList();
+
+        if (relevant.Count == 0)
+        {
+            return new PlantingCalendar(Name, "(skipped)", new List<CalendarEntry>(),
+                "No plantings with a CropRef yet — add some plants first, then generate a calendar.");
+        }
+
+        var cropSummary = new StringBuilder();
+        foreach (var c in relevant)
+        {
+            cropSummary.Append("- ").Append(c.Slug).Append(": ");
+            if (c.DaysToMaturity.HasValue) cropSummary.Append("matures in ").Append(c.DaysToMaturity).Append(" days; ");
+            if (c.CanDirectSow) cropSummary.Append("direct-sow OK; ");
+            else cropSummary.Append("start indoors; ");
+            cropSummary.Append("zones ");
+            cropSummary.Append(c.MinGrowingZone?.ToString() ?? "?");
+            cropSummary.Append('-');
+            cropSummary.Append(c.MaxGrowingZone?.ToString() ?? "?");
+            cropSummary.AppendLine();
+        }
+
+        var prompt =
+            $"Garden context:\n{ContextSummary(context)}\n\n" +
+            $"Crop facts (use these — don't invent days-to-maturity):\n{cropSummary}\n" +
+            "Produce a 12-month planting calendar from the user's location and frost dates. " +
+            "Reply ONLY with a JSON object — no prose, no code fences. Schema:\n" +
+            "{ \"summary\": \"one paragraph plain-text overview\", \"entries\": [{ \"date\": \"YYYY-MM-DD\", \"cropName\": \"…\", \"cropRef\": \"slug-or-null\", \"kind\": \"StartIndoors|DirectSow|Transplant|HarvestWindowStart|HarvestWindowEnd|Other\", \"note\": \"…\" } ] }\n" +
+            "Sort entries by date ascending. Cover the next 12 months from today. " +
+            "Per crop, include sow / transplant / harvest-window-start / harvest-window-end as appropriate.";
+
+        var body = new
+        {
+            model = _opts.Model,
+            max_tokens = 4096,
+            system = GardeningSystemPrompt,
+            messages = new[]
+            {
+                new { role = "user", content = prompt }
+            }
+        };
+
+        var (text, model, _, _) = await CallMessages(body, ct);
+
+        return ParseCalendar(text, model);
+    }
+
+    private PlantingCalendar ParseCalendar(string text, string model)
+    {
+        // The model occasionally wraps JSON in code fences despite instructions; strip them.
+        var s = text.Trim();
+        if (s.StartsWith("```"))
+        {
+            var firstNl = s.IndexOf('\n');
+            if (firstNl > 0) s = s[(firstNl + 1)..];
+            if (s.EndsWith("```")) s = s[..^3];
+            s = s.Trim();
+        }
+
+        try
+        {
+            var doc = JsonNode.Parse(s);
+            var summary = doc?["summary"]?.GetValue<string>();
+            var entriesNode = doc?["entries"]?.AsArray();
+            var entries = new List<CalendarEntry>();
+            if (entriesNode is not null)
+            {
+                foreach (var n in entriesNode)
+                {
+                    var dateStr = n?["date"]?.GetValue<string>();
+                    if (!DateOnly.TryParse(dateStr, out var d)) continue;
+                    var cropName = n?["cropName"]?.GetValue<string>() ?? "";
+                    var cropRef = n?["cropRef"]?.GetValue<string>();
+                    var kindStr = n?["kind"]?.GetValue<string>() ?? "Other";
+                    if (!Enum.TryParse<CalendarTaskKind>(kindStr, true, out var kind))
+                        kind = CalendarTaskKind.Other;
+                    var note = n?["note"]?.GetValue<string>();
+                    entries.Add(new CalendarEntry(d, cropName, cropRef, kind, note));
+                }
+            }
+            entries.Sort((a, b) => a.Date.CompareTo(b.Date));
+            return new PlantingCalendar(Name, model, entries, summary);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Failed to parse calendar JSON");
+            return new PlantingCalendar(Name, model, new List<CalendarEntry>(),
+                "Couldn't parse calendar from AI response. Raw: " + s);
+        }
     }
 
     private async Task<(string text, string model, int input, int output)> CallMessages(object body, CancellationToken ct)

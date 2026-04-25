@@ -90,6 +90,11 @@
       if (!res.ok) throw new Error("diagnose failed: " + res.status);
       return res.json();
     },
+    async calendar(gid) {
+      const res = await fetch(`/api/v1/advisor/calendar/${gid}`);
+      if (!res.ok) throw new Error("calendar failed: " + res.status);
+      return res.json();
+    },
   };
 
   // ---------- bootstrap garden id ----------
@@ -812,11 +817,12 @@
   async function checkAdvisor() {
     const s = await Api.advisorStatus();
     advisorConfigured = !!s.configured;
-    const btn = document.getElementById("askButton");
-    btn.classList.toggle("unconfigured", !advisorConfigured);
-    btn.title = advisorConfigured
-      ? "Ask the master gardener"
-      : "Advisor not configured (set CLAUDE_API_KEY)";
+    for (const id of ["askButton", "calendarButton"]) {
+      const btn = document.getElementById(id);
+      if (!btn) continue;
+      btn.classList.toggle("unconfigured", !advisorConfigured);
+      if (!advisorConfigured) btn.title = "Advisor not configured (set CLAUDE_API_KEY)";
+    }
   }
 
   function openAskModal() {
@@ -868,6 +874,92 @@
   }
 
   document.getElementById("askButton").addEventListener("click", openAskModal);
+
+  // ---------- planting calendar ----------
+  function openCalendarModal() {
+    closeModal();
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.innerHTML = `
+      <h2>📅 Planting calendar</h2>
+      <div class="ai-output"></div>
+      <div class="calendar-list"></div>
+      <div class="modal-actions">
+        <button data-act="close">Close</button>
+      </div>
+    `;
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    activeModal = backdrop;
+
+    const out = modal.querySelector(".ai-output");
+    const list = modal.querySelector(".calendar-list");
+    out.innerHTML = `<div class="ai-spinner">building your calendar…</div>`;
+
+    Api.calendar(gardenId).then((cal) => {
+      out.innerHTML = cal.summary
+        ? `<div class="ai-answer">${escapeHtml(cal.summary)}</div>
+           <div class="ai-meta">${escapeHtml(cal.provider)} · ${escapeHtml(cal.model)} · ${cal.entries.length} entries</div>`
+        : `<div class="ai-meta">${escapeHtml(cal.provider)} · ${escapeHtml(cal.model)} · ${cal.entries.length} entries</div>`;
+      renderCalendarList(list, cal.entries);
+    }).catch((e) => {
+      console.error(e);
+      out.innerHTML = `<div class="ai-spinner" style="color:var(--danger)">calendar request failed</div>`;
+    });
+
+    backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) closeModal(); });
+    modal.querySelector('[data-act="close"]').addEventListener("click", () => closeModal());
+  }
+
+  function renderCalendarList(container, entries) {
+    container.innerHTML = "";
+    if (!entries || entries.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "photo-empty";
+      empty.textContent = "No entries — add some plants with a CropRef and try again.";
+      container.appendChild(empty);
+      return;
+    }
+    let lastMonth = "";
+    for (const e of entries) {
+      const date = new Date(e.date + "T00:00:00");
+      const month = date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+      if (month !== lastMonth) {
+        const h = document.createElement("div");
+        h.className = "calendar-month";
+        h.textContent = month;
+        container.appendChild(h);
+        lastMonth = month;
+      }
+      const row = document.createElement("div");
+      row.className = "calendar-row";
+      const day = date.toLocaleDateString(undefined, { day: "2-digit", month: "short" });
+      row.innerHTML = `
+        <div class="date">${escapeHtml(day)}</div>
+        <div>
+          <div class="crop">${escapeHtml(e.cropName || "")}</div>
+          <div class="kind">${escapeHtml(humanKind(e.kind))}</div>
+          ${e.note ? `<div class="note">${escapeHtml(e.note)}</div>` : ""}
+        </div>
+      `;
+      container.appendChild(row);
+    }
+  }
+
+  function humanKind(k) {
+    return ({
+      "StartIndoors": "start indoors",
+      "DirectSow": "direct sow",
+      "Transplant": "transplant",
+      "HarvestWindowStart": "harvest starts",
+      "HarvestWindowEnd": "harvest ends",
+      "Other": "task",
+    })[k] || k;
+  }
+
+  document.getElementById("calendarButton").addEventListener("click", openCalendarModal);
 
   // ---------- bootstrap ----------
   window.addEventListener("resize", () => engine.resize());

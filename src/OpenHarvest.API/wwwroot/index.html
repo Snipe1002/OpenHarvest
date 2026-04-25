@@ -97,17 +97,33 @@
       background: var(--danger); color: #2a0a0a; border-color: var(--danger); font-weight: 600;
     }
 
-    /* "Ask" floating button */
-    #askButton {
+    /* floating advisor buttons */
+    #askButton, #calendarButton {
       position: fixed;
-      top: env(safe-area-inset-top, 8px); right: 8px;
+      top: env(safe-area-inset-top, 8px);
       background: var(--panel); color: var(--text);
       border: 1px solid var(--border); border-radius: 999px;
       padding: 8px 14px; font-size: 14px; cursor: pointer;
       box-shadow: 0 2px 6px rgba(0,0,0,0.4);
     }
-    #askButton:active, #askButton.active { background: var(--panel-hover); color: var(--accent); }
-    #askButton.unconfigured { opacity: 0.5; }
+    #askButton { right: 8px; }
+    #calendarButton { right: 92px; }
+    #askButton:active, #askButton.active,
+    #calendarButton:active, #calendarButton.active { background: var(--panel-hover); color: var(--accent); }
+    #askButton.unconfigured, #calendarButton.unconfigured { opacity: 0.5; }
+
+    /* calendar list (inside .modal) */
+    .calendar-list { max-height: 50vh; overflow-y: auto; margin-top: 12px; }
+    .calendar-month { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; margin: 12px 0 4px 0; }
+    .calendar-row {
+      display: grid; grid-template-columns: 56px 1fr; gap: 8px;
+      padding: 8px; border-bottom: 1px solid var(--border);
+      font-size: 14px;
+    }
+    .calendar-row .date { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+    .calendar-row .crop { font-weight: 500; }
+    .calendar-row .kind { color: var(--accent); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+    .calendar-row .note { color: var(--text-dim); font-size: 13px; margin-top: 2px; }
 
     .ai-answer {
       margin-top: 12px; padding: 12px;
@@ -191,6 +207,7 @@
   <canvas id="renderCanvas"></canvas>
   <div id="status">loading...</div>
   <button id="askButton" title="Ask the master gardener">🌱 Ask</button>
+  <button id="calendarButton" title="Generate a planting calendar">📅 Calendar</button>
   <div id="buttons">
     <button data-mode="bed">Bed</button>
     <button data-mode="plant">Plant</button>
