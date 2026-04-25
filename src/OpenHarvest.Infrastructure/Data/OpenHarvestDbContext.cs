@@ -10,6 +10,7 @@ public class OpenHarvestDbContext : DbContext
 
     public DbSet<Garden> Gardens => Set<Garden>();
     public DbSet<GardenEntity> Entities => Set<GardenEntity>();
+    public DbSet<Crop> Crops => Set<Crop>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
