@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using OpenHarvest.API.Hubs;
+using OpenHarvest.Application.Nudges;
 using OpenHarvest.Domain.Components;
 using OpenHarvest.Domain.Interfaces;
+using OpenHarvest.Domain.Nudges;
 
 namespace OpenHarvest.API.Controllers;
 
@@ -15,23 +17,39 @@ public class AdvisorController : ControllerBase
     private readonly ICropRepository _crops;
     private readonly IPhotoStore _photos;
     private readonly GardenBroadcaster _broadcaster;
+    private readonly NudgeScanner _nudges;
 
     public AdvisorController(
         IAiProvider ai,
         IGardenRepository gardens,
         ICropRepository crops,
         IPhotoStore photos,
-        GardenBroadcaster broadcaster)
+        GardenBroadcaster broadcaster,
+        NudgeScanner nudges)
     {
         _ai = ai;
         _gardens = gardens;
         _crops = crops;
         _photos = photos;
         _broadcaster = broadcaster;
+        _nudges = nudges;
     }
 
     [HttpGet("status")]
     public ActionResult<object> Status() => Ok(new { configured = _ai.IsConfigured, provider = _ai.Name });
+
+    [HttpGet("nudges/{gardenId:guid}")]
+    [EnableRateLimiting("advisor")]
+    public async Task<ActionResult<List<Nudge>>> Nudges(Guid gardenId, CancellationToken ct)
+    {
+        var nudges = await _nudges.ScanAsync(gardenId, DateTime.UtcNow, ct);
+        // Best-effort broadcast so other devices on the garden see the same nudges.
+        foreach (var n in nudges)
+        {
+            try { await _broadcaster.Nudge(gardenId, n, ct); } catch { /* ignore */ }
+        }
+        return Ok(nudges);
+    }
 
     [HttpPost("ask")]
     [EnableRateLimiting("advisor")]

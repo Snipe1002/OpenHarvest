@@ -95,6 +95,11 @@
       if (!res.ok) throw new Error("calendar failed: " + res.status);
       return res.json();
     },
+    async scanNudges(gid) {
+      const res = await fetch(`/api/v1/advisor/nudges/${gid}`);
+      if (!res.ok) return [];
+      return res.json();
+    },
   };
 
   // ---------- bootstrap garden id ----------
@@ -789,6 +794,7 @@
 
     connection.on("entityUpserted", applyEntityUpsert);
     connection.on("entityDeleted", applyEntityDelete);
+    connection.on("nudge", showNudge);
 
     connection.onreconnected(async () => {
       try { await connection.invoke("Join", gid); } catch (e) { console.warn("rejoin failed", e); }
@@ -961,6 +967,40 @@
 
   document.getElementById("calendarButton").addEventListener("click", openCalendarModal);
 
+  // ---------- nudges ----------
+  const shownNudgeKeys = new Set();
+  const nudgeContainer = document.getElementById("nudges");
+
+  function nudgeKey(n) { return `${n.entityId}:${n.kind}`; }
+
+  function showNudge(n) {
+    if (!n || !n.message) return;
+    const key = nudgeKey(n);
+    if (shownNudgeKeys.has(key)) return;   // dedupe across scan + signalr
+    shownNudgeKeys.add(key);
+
+    const el = document.createElement("div");
+    el.className = "nudge";
+    el.innerHTML = `<span>${escapeHtml(n.message)}</span><span class="x">×</span>`;
+    el.addEventListener("click", () => dismiss());
+    nudgeContainer.appendChild(el);
+
+    function dismiss() {
+      el.classList.add("fade");
+      setTimeout(() => { el.remove(); shownNudgeKeys.delete(key); }, 400);
+    }
+    setTimeout(dismiss, 12000);
+  }
+
+  async function scanNudges() {
+    if (!gardenId) return;
+    try {
+      const nudges = await Api.scanNudges(gardenId);
+      // The API also broadcasts via SignalR; the dedupe set keeps them from doubling up.
+      nudges.forEach(showNudge);
+    } catch (e) { /* silent — nudges are best-effort */ }
+  }
+
   // ---------- bootstrap ----------
   window.addEventListener("resize", () => engine.resize());
   engine.runRenderLoop(() => scene.render());
@@ -979,6 +1019,9 @@
       connectHub(gardenId);
       // Probe advisor configuration so the Ask button reflects state.
       checkAdvisor();
+      // Initial nudge scan + periodic refresh every 5 minutes.
+      scanNudges();
+      setInterval(scanNudges, 5 * 60 * 1000);
     } catch (e) {
       console.error(e);
       setStatus("failed to load — see console", 0);

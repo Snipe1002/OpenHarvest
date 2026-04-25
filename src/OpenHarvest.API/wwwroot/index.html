@@ -112,6 +112,31 @@
     #calendarButton:active, #calendarButton.active { background: var(--panel-hover); color: var(--accent); }
     #askButton.unconfigured, #calendarButton.unconfigured { opacity: 0.5; }
 
+    /* nudge banners */
+    #nudges {
+      position: fixed;
+      top: calc(env(safe-area-inset-top, 8px) + 48px);
+      right: 8px; left: 8px;
+      max-width: 480px; margin-left: auto;
+      display: flex; flex-direction: column; gap: 6px;
+      pointer-events: none;
+      z-index: 30;
+    }
+    .nudge {
+      pointer-events: auto;
+      display: flex; gap: 10px; align-items: center;
+      padding: 10px 12px;
+      background: var(--panel); color: var(--text);
+      border: 1px solid var(--border); border-radius: 8px;
+      font-size: 14px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+      cursor: pointer;
+      animation: nudge-in 0.2s ease;
+    }
+    .nudge.fade { opacity: 0; transition: opacity 0.4s ease; }
+    .nudge .x { color: var(--text-dim); margin-left: auto; padding-left: 8px; }
+    @keyframes nudge-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+
     /* calendar list (inside .modal) */
     .calendar-list { max-height: 50vh; overflow-y: auto; margin-top: 12px; }
     .calendar-month { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; margin: 12px 0 4px 0; }
@@ -208,6 +233,7 @@
   <div id="status">loading...</div>
   <button id="askButton" title="Ask the master gardener">🌱 Ask</button>
   <button id="calendarButton" title="Generate a planting calendar">📅 Calendar</button>
+  <div id="nudges"></div>
   <div id="buttons">
     <button data-mode="bed">Bed</button>
     <button data-mode="plant">Plant</button>

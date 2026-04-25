@@ -35,4 +35,8 @@ public class GardenBroadcaster
     public Task EntityDeleted(Guid gardenId, Guid entityId, CancellationToken ct = default) =>
         _hub.Clients.Group(GardenHub.GroupName(gardenId))
             .SendAsync("entityDeleted", entityId, ct);
+
+    public Task Nudge(Guid gardenId, object nudge, CancellationToken ct = default) =>
+        _hub.Clients.Group(GardenHub.GroupName(gardenId))
+            .SendAsync("nudge", nudge, ct);
 }
