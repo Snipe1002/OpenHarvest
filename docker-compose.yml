@@ -1,6 +1,5 @@
-# OpenHarvest — Phase 2 stack: postgres + minio + api.
-# Future phases will add: redis (Phase 3 SignalR backplane), traefik (Phase 0+ ingress),
-# worker (Phase 4 advisor / thumbnail jobs).
+# OpenHarvest — Phase 3 stack: postgres + minio + redis + api.
+# Future phases will add: traefik (Phase 0+ ingress), worker (Phase 4 advisor / thumbnail jobs).
 #
 # Quick start:
 #   docker compose up --build
@@ -25,6 +24,19 @@ services:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U openharvest"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: openharvest-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -57,6 +69,7 @@ services:
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - ConnectionStrings__Postgres=Host=postgres;Port=5432;Database=openharvest;Username=openharvest;Password=openharvest
+      - ConnectionStrings__Redis=redis:6379
       - Minio__Endpoint=minio:9000
       - Minio__AccessKey=openharvest
       - Minio__SecretKey=openharvest
@@ -68,7 +81,10 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres-data:
+  redis-data:
   minio-data:

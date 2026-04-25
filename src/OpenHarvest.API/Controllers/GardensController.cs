@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using OpenHarvest.API.Hubs;
 using OpenHarvest.Domain.Entities;
 using OpenHarvest.Domain.Enums;
 using OpenHarvest.Domain.Interfaces;
@@ -11,8 +12,13 @@ namespace OpenHarvest.API.Controllers;
 public class GardensController : ControllerBase
 {
     private readonly IGardenRepository _repo;
+    private readonly GardenBroadcaster _broadcaster;
 
-    public GardensController(IGardenRepository repo) => _repo = repo;
+    public GardensController(IGardenRepository repo, GardenBroadcaster broadcaster)
+    {
+        _repo = repo;
+        _broadcaster = broadcaster;
+    }
 
     [HttpPost]
     public async Task<ActionResult<Garden>> Create([FromBody] CreateGardenRequest req, CancellationToken ct)
@@ -62,6 +68,7 @@ public class GardensController : ControllerBase
             ModifiedUtc = now,
         };
         await _repo.AddEntityAsync(entity, ct);
+        await _broadcaster.EntityUpserted(id, entity, ct);
         return CreatedAtAction(nameof(GetEntity), new { id, entityId = entity.Id }, entity);
     }
 
@@ -90,6 +97,7 @@ public class GardensController : ControllerBase
 
         entity.ModifiedUtc = DateTime.UtcNow;
         await _repo.UpdateEntityAsync(entity, ct);
+        await _broadcaster.EntityUpserted(id, entity, ct);
         return Ok(entity);
     }
 
@@ -97,7 +105,9 @@ public class GardensController : ControllerBase
     public async Task<ActionResult> DeleteEntity(Guid id, Guid entityId, CancellationToken ct)
     {
         var ok = await _repo.DeleteEntityAsync(id, entityId, ct);
-        return ok ? NoContent() : NotFound();
+        if (!ok) return NotFound();
+        await _broadcaster.EntityDeleted(id, entityId, ct);
+        return NoContent();
     }
 }
 
