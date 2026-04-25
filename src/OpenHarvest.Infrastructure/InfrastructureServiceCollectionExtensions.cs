@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using OpenHarvest.Application.Nudges;
 using OpenHarvest.Domain.Interfaces;
 using OpenHarvest.Infrastructure.AI;
 using OpenHarvest.Infrastructure.Data;
@@ -29,6 +30,8 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.Configure<ClaudeOptions>(config.GetSection("AI:Claude"));
         services.AddHttpClient<IAiProvider, ClaudeProvider>();
+
+        services.AddScoped<NudgeScanner>();
 
         return services;
     }
