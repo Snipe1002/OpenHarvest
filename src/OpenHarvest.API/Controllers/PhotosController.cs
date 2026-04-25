@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using OpenHarvest.API.Hubs;
 using OpenHarvest.Domain.Components;
 using OpenHarvest.Domain.Interfaces;
 
@@ -10,11 +11,13 @@ public class PhotosController : ControllerBase
 {
     private readonly IGardenRepository _gardens;
     private readonly IPhotoStore _photos;
+    private readonly GardenBroadcaster _broadcaster;
 
-    public PhotosController(IGardenRepository gardens, IPhotoStore photos)
+    public PhotosController(IGardenRepository gardens, IPhotoStore photos, GardenBroadcaster broadcaster)
     {
         _gardens = gardens;
         _photos = photos;
+        _broadcaster = broadcaster;
     }
 
     private static readonly TimeSpan PresignedUrlLifetime = TimeSpan.FromHours(1);
@@ -60,6 +63,7 @@ public class PhotosController : ControllerBase
         entity.Photos.Photos.Add(photo);
         entity.ModifiedUtc = DateTime.UtcNow;
         await _gardens.UpdateEntityAsync(entity, ct);
+        await _broadcaster.EntityUpserted(gardenId, entity, ct);
 
         var url = await _photos.GetUrlAsync(objectKey, PresignedUrlLifetime, ct);
         return Ok(new PhotoView(photo.Id, url, photo.TakenUtc, photo.Caption));
@@ -77,6 +81,7 @@ public class PhotosController : ControllerBase
         entity.Photos.Photos.Remove(photo);
         entity.ModifiedUtc = DateTime.UtcNow;
         await _gardens.UpdateEntityAsync(entity, ct);
+        await _broadcaster.EntityUpserted(gardenId, entity, ct);
 
         try { await _photos.DeleteAsync(photo.ObjectKey, ct); }
         catch { /* best effort — orphaned blob is acceptable */ }

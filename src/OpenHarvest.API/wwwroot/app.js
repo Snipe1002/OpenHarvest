@@ -710,6 +710,55 @@
     window.addEventListener("pointerup", onUp, true);
   }
 
+  // ---------- live sync (SignalR) ----------
+  let connection = null;
+
+  function applyEntityUpsert(entity) {
+    if (!entity || !entity.id) return;
+    // Idempotent: dispose any existing mesh for this id, recreate from server data.
+    if (meshRegistry.has(entity.id)) disposeEntity(entity.id);
+    meshForEntity(entity);
+  }
+
+  function applyEntityDelete(entityId) {
+    if (meshRegistry.has(entityId)) disposeEntity(entityId);
+  }
+
+  async function connectHub(gid) {
+    if (!window.signalR) {
+      console.warn("SignalR client missing — live sync disabled");
+      return;
+    }
+    connection = new signalR.HubConnectionBuilder()
+      .withUrl("/hubs/garden")
+      .withAutomaticReconnect([0, 1000, 2000, 5000, 10000])
+      .configureLogging(signalR.LogLevel.Warning)
+      .build();
+
+    connection.on("entityUpserted", applyEntityUpsert);
+    connection.on("entityDeleted", applyEntityDelete);
+
+    connection.onreconnected(async () => {
+      try { await connection.invoke("Join", gid); } catch (e) { console.warn("rejoin failed", e); }
+      // Pull a fresh snapshot to recover anything missed during the disconnect.
+      try {
+        const entities = await Api.getEntities(gid);
+        // Drop any meshes for entities the server no longer has.
+        const seen = new Set(entities.map(e => e.id));
+        for (const id of [...meshRegistry.keys()]) if (!seen.has(id)) disposeEntity(id);
+        entities.forEach(applyEntityUpsert);
+      } catch (e) { console.warn("post-reconnect refresh failed", e); }
+      setStatus("reconnected — live sync resumed");
+    });
+
+    try {
+      await connection.start();
+      await connection.invoke("Join", gid);
+    } catch (e) {
+      console.warn("hub connect failed — retrying via auto-reconnect", e);
+    }
+  }
+
   // ---------- bootstrap ----------
   window.addEventListener("resize", () => engine.resize());
   engine.runRenderLoop(() => scene.render());
@@ -724,6 +773,8 @@
       setStatus(entities.length === 0
         ? "empty garden — tap Bed or Plant to start"
         : `loaded ${entities.length} entities — long-press to edit`);
+      // Live sync over SignalR.
+      connectHub(gardenId);
     } catch (e) {
       console.error(e);
       setStatus("failed to load — see console", 0);
