@@ -1,6 +1,6 @@
-# Getting Started — Developer Setup Guide
+# Getting Started — Developer Setup
 
-> This guide gets OpenHarvest running locally in under 10 minutes.
+> Phase 0 / Phase 1 setup. Brings up Postgres + the API + the Babylon canvas in your browser. ~5 minutes.
 
 ---
 
@@ -11,249 +11,110 @@
 | .NET SDK | 8.0+ | [dotnet.microsoft.com](https://dotnet.microsoft.com/download) |
 | Docker Desktop | Latest | [docker.com](https://www.docker.com/products/docker-desktop/) |
 | Git | Any | [git-scm.com](https://git-scm.com/) |
-| An editor | Any | VS Code, Rider, or Visual Studio |
 
-**AI Provider** (pick one):
-- **Claude API key** from [console.anthropic.com](https://console.anthropic.com) — recommended for production
-- **OpenAI API key** from [platform.openai.com](https://platform.openai.com)
-- **Ollama** installed locally — free, no API key needed (see below)
+For developers running the API directly (not in Docker), Postgres is also useful locally — easiest way is `docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=openharvest -e POSTGRES_USER=openharvest -e POSTGRES_DB=openharvest postgres:16-alpine`.
+
+**AI Provider** is *not* required for Phase 0 / Phase 1. Add a key when you reach Phase 4.
 
 ---
 
-## Option A — One Command (Recommended)
+## Option A — Docker Compose (recommended for first run)
 
 ```bash
 git clone https://github.com/Snipe1002/OpenHarvest.git
 cd OpenHarvest
-cp .env.example .env
-# Edit .env to add your AI API key (see instructions in the file)
-docker-compose up
+docker compose up --build
 ```
 
-This starts:
-- PostgreSQL on port `5432`
-- Redis on port `6379`
-- The API on `http://localhost:5000`
-- The web frontend on `http://localhost:3000`
-- Swagger UI on `http://localhost:5000/swagger`
+The first build takes a few minutes (NuGet restore + .NET publish). When it settles, open:
 
-The database is automatically migrated and seeded with crop data on first run.
+- PWA: <http://localhost:5000>
+- Health: <http://localhost:5000/healthz>
+- Swagger: <http://localhost:5000/swagger>
+
+You should see a Babylon scene with a brown bed and a green tomato cylinder labeled "Brandywine Tomato". That's the Phase 0 milestone — end-to-end pipeline alive: API serves an entity, browser draws it.
+
+To start fresh (nuke the Postgres volume):
+```bash
+docker compose down -v
+docker compose up --build
+```
 
 ---
 
-## Option B — Manual Setup
-
-### 1. Clone the Repository
+## Option B — Run the API directly
 
 ```bash
 git clone https://github.com/Snipe1002/OpenHarvest.git
 cd OpenHarvest
-```
 
-### 2. Start Infrastructure
+# Start just Postgres
+docker compose up -d postgres
 
-```bash
-docker-compose up -d postgres redis
-```
-
-Wait ~5 seconds for PostgreSQL to initialize.
-
-### 3. Configure the Application
-
-```bash
-# Copy the example config
-cp src/OpenHarvest.API/appsettings.Development.json.example \
-   src/OpenHarvest.API/appsettings.Development.json
-```
-
-Edit `appsettings.Development.json`:
-
-```json
-{
-  "ConnectionStrings": {
-    "DefaultConnection": "Host=localhost;Port=5432;Database=openharvest;Username=openharvest;Password=openharvest"
-  },
-  "Redis": {
-    "ConnectionString": "localhost:6379"
-  },
-  "AI": {
-    "Provider": "claude",
-    "Claude": {
-      "ApiKey": "YOUR_CLAUDE_API_KEY_HERE"
-    }
-  },
-  "Weather": {
-    "OpenWeatherMapApiKey": "YOUR_OWM_KEY_HERE"
-  },
-  "Jwt": {
-    "Secret": "generate-a-long-random-string-here",
-    "ExpiryMinutes": 15
-  }
-}
-```
-
-### 4. Run Database Migrations
-
-```bash
-dotnet ef database update --project src/OpenHarvest.Infrastructure --startup-project src/OpenHarvest.API
-```
-
-This runs all migrations and seeds the crop database from `seed-data/`.
-
-### 5. Start the API
-
-```bash
+# Run the API on the host
 dotnet run --project src/OpenHarvest.API
 ```
 
-API is now available at `http://localhost:5000`
-Swagger UI: `http://localhost:5000/swagger`
-
-### 6. Start the Web Frontend
-
-Open a new terminal:
-
-```bash
-# Blazor WASM
-dotnet run --project src/OpenHarvest.Web
-
-# OR if using React
-cd src/OpenHarvest.Web
-npm install
-npm run dev
-```
+This uses `appsettings.Development.json` (Postgres at `localhost:5432`). Migrations and seed data apply automatically on startup.
 
 ---
 
-## Using Ollama (Free, No API Key)
+## What's in the Phase 0 build
 
-If you don't have an AI API key, run a local model instead:
-
-### Install Ollama
-
-**Windows / macOS:** Download from [ollama.ai](https://ollama.ai)
-
-**Linux:**
-```bash
-curl -fsSL https://ollama.ai/install.sh | sh
-```
-
-### Pull Models
-
-```bash
-# Text model for Q&A and recommendations
-ollama pull llama3
-
-# Vision model for plant diagnosis
-ollama pull llava
-```
-
-### Configure OpenHarvest to Use Ollama
-
-In `appsettings.Development.json`:
-```json
-{
-  "AI": {
-    "Provider": "ollama",
-    "Ollama": {
-      "BaseUrl": "http://localhost:11434",
-      "TextModel": "llama3",
-      "VisionModel": "llava"
-    }
-  }
-}
-```
-
----
-
-## Free API Keys
-
-| Service | Used For | Free Tier |
-|---|---|---|
-| [OpenWeatherMap](https://openweathermap.org/api) | Frost dates, weather context | 1,000 calls/day |
-| [Claude (Anthropic)](https://console.anthropic.com) | AI Q&A, diagnosis | Pay-as-you-go (very cheap) |
-| [OpenAI](https://platform.openai.com) | Alternative AI provider | Pay-as-you-go |
-
-Weather data is cached in Redis for 6 hours to minimize API calls.
-
----
-
-## Running Tests
-
-```bash
-# All tests
-dotnet test
-
-# Specific project
-dotnet test tests/OpenHarvest.Application.Tests
-
-# With coverage
-dotnet test --collect:"XPlat Code Coverage"
-```
-
----
-
-## Viewing the Database
-
-A visual DB client isn't required, but these are recommended:
-
-- **TablePlus** (macOS/Windows) — free tier available
-- **pgAdmin** — free, included in many Docker setups
-- **DBeaver** — free, cross-platform
-
-Connection details (local dev):
-```
-Host:     localhost
-Port:     5432
-Database: openharvest
-Username: openharvest
-Password: openharvest
-```
-
----
-
-## Common Issues
-
-### `No such host: postgres`
-
-The API can't find PostgreSQL. Make sure Docker Compose is running:
-```bash
-docker-compose up -d postgres redis
-docker-compose ps  # should show both as "Up"
-```
-
-### `AI provider returned an error`
-
-Check your API key in `appsettings.Development.json`. For Claude, ensure the key starts with `sk-ant-`.
-
-### `Migration failed`
-
-Make sure the `dotnet-ef` tool is installed:
-```bash
-dotnet tool install --global dotnet-ef
-```
-
-Then re-run the migration command.
-
-### Port conflicts
-
-If ports 5000, 5432, or 6379 are in use, edit `docker-compose.yml` to map to different local ports.
-
----
-
-## Project Structure Quick Reference
-
-| Path | What lives here |
+| Layer | Implementation |
 |---|---|
-| `src/OpenHarvest.Domain/` | Entities, interfaces, enums — no dependencies |
-| `src/OpenHarvest.Application/` | Business logic, DTOs, validators |
-| `src/OpenHarvest.Infrastructure/` | Database, AI providers, weather API |
-| `src/OpenHarvest.API/` | Controllers, middleware, Program.cs |
-| `src/OpenHarvest.Web/` | Blazor/React frontend |
-| `tests/` | Unit and integration tests |
-| `seed-data/` | Crop database JSON (OpenFarm CC0) |
-| `docs/` | All documentation |
+| API | `OpenHarvest.API` — ASP.NET Core 8, REST controller `GET /api/v1/gardens/{id}/entities` |
+| Domain | `OpenHarvest.Domain` — `GardenEntity` with nullable components (PhotoLog, GrowthLog, ScheduleComponent, YieldLog, HealthLog) |
+| Infrastructure | `OpenHarvest.Infrastructure` — EF Core 8 + Npgsql, JSONB component columns, repository |
+| Frontend | Static `wwwroot/` PWA: HTML + Babylon.js (CDN). Loads entities from API and renders meshes. |
+
+Hard-coded demo garden id (used by the canvas): `11111111-1111-1111-1111-111111111111`.
 
 ---
 
-*Questions? Open an issue or start a discussion on GitHub.*
+## Adding a Database Migration
+
+```bash
+dotnet ef migrations add YourMigrationName \
+    --project src/OpenHarvest.Infrastructure \
+    --startup-project src/OpenHarvest.API \
+    --output-dir Data/Migrations
+```
+
+Migrations apply automatically on API startup in Development environment. In Production, run `dotnet ef database update` as a separate step.
+
+---
+
+## Project Layout
+
+```
+src/
+  OpenHarvest.Domain/          # GardenEntity, components, value objects, interfaces
+  OpenHarvest.Application/     # Use cases, commands, DTOs (mostly empty in Phase 0)
+  OpenHarvest.Infrastructure/  # EF Core DbContext + migrations + repository
+  OpenHarvest.API/             # ASP.NET Core entrypoint + controllers + PWA assets in wwwroot/
+  OpenHarvest.Worker/          # BackgroundService entrypoint (empty until Phase 2+)
+docs/
+  ARCHITECTURE.md              # 4-layer system design
+  DATA_MODEL.md                # GardenEntity + components
+  UX.md                        # Casual-user flow
+  DEPLOY.md                    # Compose / Swarm topology
+  AI_INTEGRATION.md            # Advisor (Layer 3) provider guide
+ROADMAP.md
+```
+
+---
+
+## Troubleshooting
+
+**`docker compose up` fails with "build error":** make sure Docker Desktop has Linux containers enabled (default). Re-run with `--no-cache` if a dependency changed.
+
+**Migrations error on startup:** the Postgres healthcheck waits up to ~50s. If the API still fails, check `docker logs openharvest-postgres` for crash output.
+
+**Port 5000 already in use:** edit the `ports` block in `docker-compose.yml` to map a different host port (e.g. `"5050:5000"`).
+
+**Browser shows "loading..." forever:** open devtools → Network — confirm `GET /api/v1/gardens/.../entities` returns 200 with a JSON array. CORS is permissive in Development; if you proxied the API behind another domain, set `ASPNETCORE_ENVIRONMENT=Development` so CORS opens up.
+
+---
+
+*Continue with [`UX.md`](UX.md) to understand the canvas-first product, or [`ARCHITECTURE.md`](ARCHITECTURE.md) for the layered system.*
