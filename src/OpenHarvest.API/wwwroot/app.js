@@ -66,6 +66,30 @@
       const res = await fetch(`/api/v1/gardens/${gid}/entities/${eid}/photos/${pid}`, { method: "DELETE" });
       if (!res.ok && res.status !== 404) throw new Error("deletePhoto failed: " + res.status);
     },
+    async advisorStatus() {
+      try {
+        const res = await fetch("/api/v1/advisor/status");
+        return res.ok ? res.json() : { configured: false };
+      } catch { return { configured: false }; }
+    },
+    async ask(gid, question) {
+      const res = await fetch("/api/v1/advisor/ask", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gardenId: gid, question })
+      });
+      if (!res.ok) throw new Error("ask failed: " + res.status);
+      return res.json();
+    },
+    async diagnose(gid, eid, file, description) {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (description) fd.append("description", description);
+      const res = await fetch(`/api/v1/advisor/diagnose/${gid}/${eid}`, {
+        method: "POST", body: fd
+      });
+      if (!res.ok) throw new Error("diagnose failed: " + res.status);
+      return res.json();
+    },
   };
 
   // ---------- bootstrap garden id ----------
@@ -589,10 +613,12 @@
     modal.className = "modal";
     modal.innerHTML = `
       <h2>Photos</h2>
-      <div class="modal-actions" style="justify-content:flex-start; margin-top:0;">
+      <div class="modal-actions" style="justify-content:flex-start; margin-top:0; gap:8px;">
         <button class="primary" data-act="take">📷 Take photo</button>
+        <button data-act="diagnose">🔍 Diagnose</button>
       </div>
       <div class="photo-grid"></div>
+      <div class="ai-output"></div>
       <div class="modal-actions">
         <button data-act="close">Close</button>
       </div>
@@ -638,21 +664,42 @@
     };
 
     const photoInput = document.getElementById("photoInput");
+    const out = modal.querySelector(".ai-output");
+    let nextAction = "upload"; // or "diagnose"
+
     const onPick = async () => {
       const file = photoInput.files?.[0];
       photoInput.value = "";
       if (!file) return;
-      setStatus("uploading photo...");
-      try {
-        await Api.uploadPhoto(gardenId, eid, file);
-        setStatus("photo uploaded");
-        await refresh();
-        await refreshEntityPhotoBadge(eid);
-      } catch (e) { console.error(e); setStatus("photo upload failed"); }
+      const action = nextAction;
+      nextAction = "upload";
+      if (action === "diagnose") {
+        if (!advisorConfigured) { setStatus("AI advisor not configured"); return; }
+        out.innerHTML = `<div class="ai-spinner">analyzing the photo…</div>`;
+        try {
+          const result = await Api.diagnose(gardenId, eid, file, "");
+          out.innerHTML = `
+            <div class="ai-answer">${escapeHtml(result.diagnosis)}${result.identifiedProblem ? "\n\nProblem: " + escapeHtml(result.identifiedProblem) : ""}${result.treatment ? "\n\nTreatment: " + escapeHtml(result.treatment) : ""}</div>
+            <div class="ai-meta">${escapeHtml(result.provider)} · ${escapeHtml(result.model)}</div>
+          `;
+          setStatus("diagnosis logged");
+          await refresh();
+          await refreshEntityPhotoBadge(eid);
+        } catch (e) { console.error(e); out.innerHTML = `<div class="ai-spinner" style="color:var(--danger)">diagnosis failed</div>`; }
+      } else {
+        setStatus("uploading photo...");
+        try {
+          await Api.uploadPhoto(gardenId, eid, file);
+          setStatus("photo uploaded");
+          await refresh();
+          await refreshEntityPhotoBadge(eid);
+        } catch (e) { console.error(e); setStatus("photo upload failed"); }
+      }
     };
     photoInput.addEventListener("change", onPick, { once: true });
 
-    modal.querySelector('[data-act="take"]').addEventListener("click", () => photoInput.click());
+    modal.querySelector('[data-act="take"]').addEventListener("click", () => { nextAction = "upload"; photoInput.click(); });
+    modal.querySelector('[data-act="diagnose"]').addEventListener("click", () => { nextAction = "diagnose"; photoInput.click(); });
     modal.querySelector('[data-act="close"]').addEventListener("click", () => closeModal());
     backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) closeModal(); });
 
@@ -759,6 +806,69 @@
     }
   }
 
+  // ---------- ask the master gardener ----------
+  let advisorConfigured = false;
+
+  async function checkAdvisor() {
+    const s = await Api.advisorStatus();
+    advisorConfigured = !!s.configured;
+    const btn = document.getElementById("askButton");
+    btn.classList.toggle("unconfigured", !advisorConfigured);
+    btn.title = advisorConfigured
+      ? "Ask the master gardener"
+      : "Advisor not configured (set CLAUDE_API_KEY)";
+  }
+
+  function openAskModal() {
+    closeModal();
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.innerHTML = `
+      <h2>🌱 Ask the master gardener</h2>
+      <input type="text" placeholder="What's eating my tomato leaves? When should I plant carrots?" autocomplete="off" />
+      <div class="ai-output"></div>
+      <div class="modal-actions">
+        <button data-act="close">Close</button>
+        <button class="primary" data-act="ask">Ask</button>
+      </div>
+    `;
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    activeModal = backdrop;
+
+    const input = modal.querySelector("input");
+    const out = modal.querySelector(".ai-output");
+
+    const ask = async () => {
+      const q = input.value.trim();
+      if (!q) return;
+      out.innerHTML = `<div class="ai-spinner">thinking…</div>`;
+      try {
+        const a = await Api.ask(gardenId, q);
+        out.innerHTML = `
+          <div class="ai-answer">${escapeHtml(a.text)}</div>
+          <div class="ai-meta">${escapeHtml(a.provider)} · ${escapeHtml(a.model)} · in ${a.inputTokens} / out ${a.outputTokens}</div>
+        `;
+      } catch (e) {
+        console.error(e);
+        out.innerHTML = `<div class="ai-spinner" style="color:var(--danger)">request failed</div>`;
+      }
+    };
+
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") { ask(); ev.preventDefault(); }
+      else if (ev.key === "Escape") closeModal();
+    });
+    backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) closeModal(); });
+    modal.querySelector('[data-act="close"]').addEventListener("click", () => closeModal());
+    modal.querySelector('[data-act="ask"]').addEventListener("click", ask);
+    setTimeout(() => input.focus(), 50);
+  }
+
+  document.getElementById("askButton").addEventListener("click", openAskModal);
+
   // ---------- bootstrap ----------
   window.addEventListener("resize", () => engine.resize());
   engine.runRenderLoop(() => scene.render());
@@ -775,6 +885,8 @@
         : `loaded ${entities.length} entities — long-press to edit`);
       // Live sync over SignalR.
       connectHub(gardenId);
+      // Probe advisor configuration so the Ask button reflects state.
+      checkAdvisor();
     } catch (e) {
       console.error(e);
       setStatus("failed to load — see console", 0);
