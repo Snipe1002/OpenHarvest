@@ -1,0 +1,55 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{C5B55695-D068-49D4-A2A9-0B20A6A0D5EA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenHarvest.Domain", "src\OpenHarvest.Domain\OpenHarvest.Domain.csproj", "{26CAD7DC-9313-4AE1-98FC-2DA4DA2BD110}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenHarvest.Application", "src\OpenHarvest.Application\OpenHarvest.Application.csproj", "{AF0A6FA3-6639-41FA-8608-38EADEF10A5F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenHarvest.Infrastructure", "src\OpenHarvest.Infrastructure\OpenHarvest.Infrastructure.csproj", "{E4C78BA1-29BB-45B0-BF28-E808DEB3BD14}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenHarvest.API", "src\OpenHarvest.API\OpenHarvest.API.csproj", "{3CAEAB93-C087-4530-83B1-9C3082405223}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenHarvest.Worker", "src\OpenHarvest.Worker\OpenHarvest.Worker.csproj", "{D1BC7465-FC75-4C71-950B-BADF7B0F0890}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{26CAD7DC-9313-4AE1-98FC-2DA4DA2BD110}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{26CAD7DC-9313-4AE1-98FC-2DA4DA2BD110}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{26CAD7DC-9313-4AE1-98FC-2DA4DA2BD110}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{26CAD7DC-9313-4AE1-98FC-2DA4DA2BD110}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AF0A6FA3-6639-41FA-8608-38EADEF10A5F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AF0A6FA3-6639-41FA-8608-38EADEF10A5F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AF0A6FA3-6639-41FA-8608-38EADEF10A5F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AF0A6FA3-6639-41FA-8608-38EADEF10A5F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E4C78BA1-29BB-45B0-BF28-E808DEB3BD14}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E4C78BA1-29BB-45B0-BF28-E808DEB3BD14}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E4C78BA1-29BB-45B0-BF28-E808DEB3BD14}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E4C78BA1-29BB-45B0-BF28-E808DEB3BD14}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3CAEAB93-C087-4530-83B1-9C3082405223}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3CAEAB93-C087-4530-83B1-9C3082405223}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3CAEAB93-C087-4530-83B1-9C3082405223}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3CAEAB93-C087-4530-83B1-9C3082405223}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D1BC7465-FC75-4C71-950B-BADF7B0F0890}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D1BC7465-FC75-4C71-950B-BADF7B0F0890}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D1BC7465-FC75-4C71-950B-BADF7B0F0890}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D1BC7465-FC75-4C71-950B-BADF7B0F0890}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{26CAD7DC-9313-4AE1-98FC-2DA4DA2BD110} = {C5B55695-D068-49D4-A2A9-0B20A6A0D5EA}
+		{AF0A6FA3-6639-41FA-8608-38EADEF10A5F} = {C5B55695-D068-49D4-A2A9-0B20A6A0D5EA}
+		{E4C78BA1-29BB-45B0-BF28-E808DEB3BD14} = {C5B55695-D068-49D4-A2A9-0B20A6A0D5EA}
+		{3CAEAB93-C087-4530-83B1-9C3082405223} = {C5B55695-D068-49D4-A2A9-0B20A6A0D5EA}
+		{D1BC7465-FC75-4C71-950B-BADF7B0F0890} = {C5B55695-D068-49D4-A2A9-0B20A6A0D5EA}
+	EndGlobalSection
+EndGlobal

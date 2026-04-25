@@ -1,7 +1,15 @@
-version: '3.9'
+# OpenHarvest — Phase 0 / Phase 1 stack.
+# Just postgres + api. Future phases will add: redis (Phase 3 SignalR backplane),
+# minio (Phase 2 photo storage), traefik (Phase 0+ ingress), worker (Phase 4).
+#
+# Quick start:
+#   docker compose up --build
+#   open http://localhost:5000
+#
+# Resets:
+#   docker compose down -v   # nukes the postgres volume too
 
 services:
-  # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
     container_name: openharvest-postgres
@@ -15,77 +23,23 @@ services:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U openharvest"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
-  # Redis Cache
-  redis:
-    image: redis:7-alpine
-    container_name: openharvest-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # OpenHarvest API
   api:
     build:
       context: .
       dockerfile: src/OpenHarvest.API/Dockerfile
     container_name: openharvest-api
     ports:
-      - "5000:8080"
+      - "5000:5000"
     environment:
-      - ASPNETCORE_ENVIRONMENT=Production
-      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=openharvest;Username=openharvest;Password=openharvest
-      - Redis__ConnectionString=redis:6379
-      - AI__Provider=${AI_PROVIDER:-ollama}
-      - AI__Claude__ApiKey=${CLAUDE_API_KEY:-}
-      - AI__OpenAI__ApiKey=${OPENAI_API_KEY:-}
-      - AI__Ollama__BaseUrl=http://ollama:11434
-      - Weather__OpenWeatherMapApiKey=${OWM_API_KEY:-}
-      - Jwt__Secret=${JWT_SECRET:-change-this-in-production-use-a-long-random-string}
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__Postgres=Host=postgres;Port=5432;Database=openharvest;Username=openharvest;Password=openharvest
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - uploads:/app/uploads
-
-  # OpenHarvest Web Frontend
-  web:
-    build:
-      context: .
-      dockerfile: src/OpenHarvest.Web/Dockerfile
-    container_name: openharvest-web
-    ports:
-      - "3000:80"
-    depends_on:
-      - api
-    environment:
-      - API_URL=http://localhost:5000
-
-  # Ollama (optional — local AI, no API key needed)
-  # Remove this service if using Claude or OpenAI
-  ollama:
-    image: ollama/ollama:latest
-    container_name: openharvest-ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-    profiles:
-      - ollama   # Only starts when: docker-compose --profile ollama up
 
 volumes:
   postgres-data:
-  redis-data:
-  uploads:
-  ollama-data:

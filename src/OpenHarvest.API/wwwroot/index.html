@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no" />
+  <title>OpenHarvest</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <style>
+    html, body {
+      margin: 0; padding: 0; height: 100%; overflow: hidden;
+      background: #0e0e10; color: #eee;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    #renderCanvas { width: 100%; height: 100%; touch-action: none; outline: none; display: block; }
+    #status {
+      position: fixed; top: 8px; left: 8px;
+      background: rgba(0,0,0,0.55); padding: 6px 10px; border-radius: 6px;
+      font-size: 12px; pointer-events: none;
+    }
+    #buttons {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+      background: rgba(255,255,255,0.06);
+      border-top: 1px solid rgba(255,255,255,0.12);
+    }
+    #buttons button {
+      background: #1c1c20; color: #eee; border: 0; padding: 18px 4px;
+      font-size: 16px; font-weight: 500;
+      cursor: pointer;
+    }
+    #buttons button:active { background: #2a2a30; }
+    #buttons button:disabled { color: #666; cursor: default; }
+  </style>
+</head>
+<body>
+  <canvas id="renderCanvas"></canvas>
+  <div id="status">loading...</div>
+  <div id="buttons">
+    <button disabled title="Phase 1">Bed</button>
+    <button disabled title="Phase 1">Plant</button>
+    <button disabled title="Phase 1">Structure</button>
+    <button disabled title="Phase 1">Label</button>
+  </div>
+
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script src="https://cdn.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

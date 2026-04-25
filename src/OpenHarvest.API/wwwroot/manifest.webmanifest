@@ -1,0 +1,10 @@
+{
+  "name": "OpenHarvest",
+  "short_name": "OpenHarvest",
+  "description": "Open-source AI-powered gardening platform",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0e0e10",
+  "theme_color": "#0e0e10",
+  "icons": []
+}
