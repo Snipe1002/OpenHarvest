@@ -20,6 +20,7 @@ public static class InfrastructureServiceCollectionExtensions
             opts.UseNpgsql(conn));
 
         services.AddScoped<IGardenRepository, GardenRepository>();
+        services.AddScoped<ICropRepository, CropRepository>();
         return services;
     }
 }

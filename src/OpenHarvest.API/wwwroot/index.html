@@ -2,44 +2,144 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover" />
   <title>OpenHarvest</title>
   <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#0e0e10" />
   <style>
+    :root {
+      --bg: #0e0e10;
+      --panel: #1c1c20;
+      --panel-hover: #2a2a30;
+      --border: rgba(255,255,255,0.12);
+      --text: #eee;
+      --text-dim: #aaa;
+      --accent: #4ade80;
+      --danger: #f87171;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body {
       margin: 0; padding: 0; height: 100%; overflow: hidden;
-      background: #0e0e10; color: #eee;
+      background: var(--bg); color: var(--text);
       font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      user-select: none;
     }
     #renderCanvas { width: 100%; height: 100%; touch-action: none; outline: none; display: block; }
+
     #status {
-      position: fixed; top: 8px; left: 8px;
+      position: fixed; top: env(safe-area-inset-top, 8px); left: 8px;
       background: rgba(0,0,0,0.55); padding: 6px 10px; border-radius: 6px;
-      font-size: 12px; pointer-events: none;
+      font-size: 12px; pointer-events: none; max-width: 80vw;
+      transition: opacity 0.4s;
     }
+    #status.hide { opacity: 0; }
+
     #buttons {
       position: fixed; bottom: 0; left: 0; right: 0;
       display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
-      background: rgba(255,255,255,0.06);
-      border-top: 1px solid rgba(255,255,255,0.12);
+      background: var(--border);
+      border-top: 1px solid var(--border);
+      padding-bottom: env(safe-area-inset-bottom, 0);
     }
     #buttons button {
-      background: #1c1c20; color: #eee; border: 0; padding: 18px 4px;
-      font-size: 16px; font-weight: 500;
-      cursor: pointer;
+      background: var(--panel); color: var(--text); border: 0;
+      padding: 18px 4px; font-size: 16px; font-weight: 500;
+      cursor: pointer; touch-action: manipulation;
     }
-    #buttons button:active { background: #2a2a30; }
+    #buttons button:active, #buttons button.active { background: var(--panel-hover); color: var(--accent); }
     #buttons button:disabled { color: #666; cursor: default; }
+
+    /* autocomplete + rename modal */
+    .modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.6);
+      display: flex; align-items: flex-end; justify-content: center;
+      z-index: 100;
+      padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+    .modal {
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      width: 100%; max-width: 600px;
+      padding: 16px;
+      border-top-left-radius: 12px;
+      border-top-right-radius: 12px;
+    }
+    .modal h2 { margin: 0 0 12px 0; font-size: 16px; font-weight: 500; color: var(--text-dim); }
+    .modal input {
+      width: 100%; padding: 12px; font-size: 16px;
+      background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; outline: none;
+    }
+    .modal input:focus { border-color: var(--accent); }
+    .suggestions {
+      max-height: 40vh; overflow-y: auto; margin-top: 8px;
+    }
+    .suggestion {
+      padding: 12px; cursor: pointer; border-radius: 6px;
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .suggestion:hover, .suggestion.highlight { background: var(--panel-hover); }
+    .suggestion .name { font-size: 16px; }
+    .suggestion .scientific { font-size: 12px; color: var(--text-dim); font-style: italic; }
+    .modal-actions {
+      display: flex; gap: 8px; margin-top: 12px; justify-content: flex-end;
+    }
+    .modal-actions button {
+      padding: 10px 16px; font-size: 14px;
+      background: transparent; color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; cursor: pointer;
+    }
+    .modal-actions button.primary {
+      background: var(--accent); color: #06210d; border-color: var(--accent); font-weight: 600;
+    }
+    .modal-actions button.danger {
+      background: var(--danger); color: #2a0a0a; border-color: var(--danger); font-weight: 600;
+    }
+
+    /* radial menu */
+    #radial {
+      position: fixed; pointer-events: none; z-index: 50;
+      width: 200px; height: 200px;
+      transform: translate(-50%, -50%);
+    }
+    #radial.open { pointer-events: auto; }
+    #radial .item {
+      position: absolute; left: 50%; top: 50%;
+      width: 64px; height: 64px;
+      margin-left: -32px; margin-top: -32px;
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 500;
+      cursor: pointer;
+      transition: transform 0.16s ease, opacity 0.16s ease;
+      transform: translate(0, 0);
+      opacity: 0;
+    }
+    #radial.open .item { opacity: 1; }
+    #radial.open .item:nth-child(1) { transform: translate(0, -70px); }    /* up */
+    #radial.open .item:nth-child(2) { transform: translate(70px, 0); }     /* right */
+    #radial.open .item:nth-child(3) { transform: translate(0, 70px); }     /* down */
+    #radial.open .item:nth-child(4) { transform: translate(-70px, 0); }    /* left */
+    #radial .item:active { background: var(--panel-hover); }
+    #radial .item.danger { color: var(--danger); }
   </style>
 </head>
 <body>
   <canvas id="renderCanvas"></canvas>
   <div id="status">loading...</div>
   <div id="buttons">
-    <button disabled title="Phase 1">Bed</button>
-    <button disabled title="Phase 1">Plant</button>
-    <button disabled title="Phase 1">Structure</button>
-    <button disabled title="Phase 1">Label</button>
+    <button data-mode="bed">Bed</button>
+    <button data-mode="plant">Plant</button>
+    <button disabled title="coming soon">Structure</button>
+    <button disabled title="coming soon">Label</button>
+  </div>
+  <div id="radial">
+    <div class="item" data-action="rename">Rename</div>
+    <div class="item" data-action="move">Move</div>
+    <div class="item danger" data-action="delete">Delete</div>
+    <div class="item" data-action="cancel">Cancel</div>
   </div>
 
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
