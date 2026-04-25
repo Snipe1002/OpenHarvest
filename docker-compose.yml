@@ -1,13 +1,15 @@
-# OpenHarvest — Phase 0 / Phase 1 stack.
-# Just postgres + api. Future phases will add: redis (Phase 3 SignalR backplane),
-# minio (Phase 2 photo storage), traefik (Phase 0+ ingress), worker (Phase 4).
+# OpenHarvest — Phase 2 stack: postgres + minio + api.
+# Future phases will add: redis (Phase 3 SignalR backplane), traefik (Phase 0+ ingress),
+# worker (Phase 4 advisor / thumbnail jobs).
 #
 # Quick start:
 #   docker compose up --build
 #   open http://localhost:5000
 #
+# Optional: open http://localhost:9001 for the MinIO console (login openharvest/openharvest)
+#
 # Resets:
-#   docker compose down -v   # nukes the postgres volume too
+#   docker compose down -v   # nukes the postgres + minio volumes too
 
 services:
   postgres:
@@ -27,6 +29,24 @@ services:
       timeout: 3s
       retries: 10
 
+  minio:
+    image: minio/minio:latest
+    container_name: openharvest-minio
+    environment:
+      MINIO_ROOT_USER: openharvest
+      MINIO_ROOT_PASSWORD: openharvest
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   api:
     build:
       context: .
@@ -37,9 +57,18 @@ services:
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - ConnectionStrings__Postgres=Host=postgres;Port=5432;Database=openharvest;Username=openharvest;Password=openharvest
+      - Minio__Endpoint=minio:9000
+      - Minio__AccessKey=openharvest
+      - Minio__SecretKey=openharvest
+      - Minio__Bucket=photos
+      - Minio__UseSsl=false
+      - Minio__PresignedUrlBase=http://localhost:9000
     depends_on:
       postgres:
+        condition: service_healthy
+      minio:
         condition: service_healthy
 
 volumes:
   postgres-data:
+  minio-data:

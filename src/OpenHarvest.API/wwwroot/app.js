@@ -48,6 +48,24 @@
       if (!res.ok) return [];
       return res.json();
     },
+    async listPhotos(gid, eid) {
+      const res = await fetch(`/api/v1/gardens/${gid}/entities/${eid}/photos`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    async uploadPhoto(gid, eid, file) {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/v1/gardens/${gid}/entities/${eid}/photos`, {
+        method: "POST", body: fd
+      });
+      if (!res.ok) throw new Error("uploadPhoto failed: " + res.status);
+      return res.json();
+    },
+    async deletePhoto(gid, eid, pid) {
+      const res = await fetch(`/api/v1/gardens/${gid}/entities/${eid}/photos/${pid}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 404) throw new Error("deletePhoto failed: " + res.status);
+    },
   };
 
   // ---------- bootstrap garden id ----------
@@ -463,6 +481,7 @@
     if (action === "delete") deleteEntityById(eid);
     else if (action === "rename") openRenameModal(eid);
     else if (action === "move") startMove(eid);
+    else if (action === "photo") openPhotosModal(eid);
   });
   document.addEventListener("pointerdown", (ev) => {
     if (radial.classList.contains("open") && !radial.contains(ev.target)) closeRadial();
@@ -559,6 +578,98 @@
     modal.querySelector('[data-act="cancel"]').addEventListener("click", () => closeModal());
     modal.querySelector('[data-act="confirm"]').addEventListener("click", () => save());
     setTimeout(() => { input.focus(); input.select(); }, 50);
+  }
+
+  // ---------- photos modal ----------
+  async function openPhotosModal(eid) {
+    closeModal();
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.innerHTML = `
+      <h2>Photos</h2>
+      <div class="modal-actions" style="justify-content:flex-start; margin-top:0;">
+        <button class="primary" data-act="take">📷 Take photo</button>
+      </div>
+      <div class="photo-grid"></div>
+      <div class="modal-actions">
+        <button data-act="close">Close</button>
+      </div>
+    `;
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    activeModal = backdrop;
+
+    const grid = modal.querySelector(".photo-grid");
+    const refresh = async () => {
+      grid.innerHTML = "";
+      const photos = await Api.listPhotos(gardenId, eid);
+      if (photos.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "photo-empty";
+        empty.textContent = "No photos yet. Tap “Take photo” to start a journal for this entity.";
+        grid.appendChild(empty);
+        return;
+      }
+      photos.forEach(p => {
+        const tile = document.createElement("div");
+        tile.className = "photo-tile";
+        const date = new Date(p.takenUtc).toLocaleDateString();
+        tile.innerHTML = `
+          <img src="${p.url}" alt="" loading="lazy" />
+          <div class="meta">${escapeHtml(date)}</div>
+          <div class="delete" title="Delete">×</div>
+        `;
+        tile.querySelector(".delete").addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          if (!confirm("Delete this photo?")) return;
+          try {
+            await Api.deletePhoto(gardenId, eid, p.id);
+            await refresh();
+            await refreshEntityPhotoBadge(eid);
+          } catch (e) { console.error(e); setStatus("photo delete failed"); }
+        });
+        tile.addEventListener("click", () => {
+          window.open(p.url, "_blank", "noopener");
+        });
+        grid.appendChild(tile);
+      });
+    };
+
+    const photoInput = document.getElementById("photoInput");
+    const onPick = async () => {
+      const file = photoInput.files?.[0];
+      photoInput.value = "";
+      if (!file) return;
+      setStatus("uploading photo...");
+      try {
+        await Api.uploadPhoto(gardenId, eid, file);
+        setStatus("photo uploaded");
+        await refresh();
+        await refreshEntityPhotoBadge(eid);
+      } catch (e) { console.error(e); setStatus("photo upload failed"); }
+    };
+    photoInput.addEventListener("change", onPick, { once: true });
+
+    modal.querySelector('[data-act="take"]').addEventListener("click", () => photoInput.click());
+    modal.querySelector('[data-act="close"]').addEventListener("click", () => closeModal());
+    backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) closeModal(); });
+
+    refresh();
+  }
+
+  // After upload/delete, refresh the entity's local mesh count badge by re-fetching.
+  async function refreshEntityPhotoBadge(eid) {
+    // Phase 2 doesn't surface a badge yet — placeholder for future UX. Refetch entities so
+    // PhotoLog presence is up to date in the local registry.
+    try {
+      const entities = await Api.getEntities(gardenId);
+      entities.forEach(e => {
+        const rec = meshRegistry.get(e.id);
+        if (rec) rec.entity = e;
+      });
+    } catch { /* ignore */ }
   }
 
   // Move: detach camera control, drag entity along the ground until pointer up.

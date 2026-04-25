@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using OpenHarvest.Domain.Interfaces;
 using OpenHarvest.Infrastructure.Data;
+using OpenHarvest.Infrastructure.Storage;
 
 namespace OpenHarvest.Infrastructure;
 
@@ -21,6 +22,10 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddScoped<IGardenRepository, GardenRepository>();
         services.AddScoped<ICropRepository, CropRepository>();
+
+        services.Configure<MinioOptions>(config.GetSection("Minio"));
+        services.AddSingleton<IPhotoStore, MinioPhotoStore>();
+
         return services;
     }
 }
