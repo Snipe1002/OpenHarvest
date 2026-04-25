@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using OpenHarvest.API.Hubs;
 using OpenHarvest.Domain.Components;
 using OpenHarvest.Domain.Interfaces;
@@ -33,6 +34,7 @@ public class AdvisorController : ControllerBase
     public ActionResult<object> Status() => Ok(new { configured = _ai.IsConfigured, provider = _ai.Name });
 
     [HttpPost("ask")]
+    [EnableRateLimiting("advisor")]
     public async Task<ActionResult<AdvisorAnswer>> Ask([FromBody] AskRequest req, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.Question)) return BadRequest("missing question");
@@ -43,6 +45,7 @@ public class AdvisorController : ControllerBase
     }
 
     [HttpGet("calendar/{gardenId:guid}")]
+    [EnableRateLimiting("advisor")]
     public async Task<ActionResult<PlantingCalendar>> Calendar(Guid gardenId, CancellationToken ct)
     {
         var context = await BuildGardenContext(gardenId, ct);
@@ -63,6 +66,7 @@ public class AdvisorController : ControllerBase
     }
 
     [HttpPost("diagnose/{gardenId:guid}/{entityId:guid}")]
+    [EnableRateLimiting("advisor-vision")]
     [RequestSizeLimit(50_000_000)]
     public async Task<ActionResult<DiagnosisResult>> Diagnose(
         Guid gardenId,
