@@ -8,10 +8,21 @@
 // Anonymous-first: garden id stored in localStorage. If absent, POST a new garden on first load.
 
 (() => {
+  // ---------- base URL ----------
+  // Resolve every API/SignalR URL against the document's <base href>. This makes the app
+  // portable between root deployments (https://openharvest.nexus/) and sub-path deployments
+  // (https://nexus.example/openharvest/) without per-environment config. BASE always ends
+  // with a trailing slash, so callers append paths WITHOUT a leading slash:
+  //   fetch(BASE + "api/v1/gardens")
+  const BASE = (() => {
+    const u = new URL("./", document.baseURI);
+    return u.pathname; // ends with /
+  })();
+
   // ---------- API ----------
   const Api = {
     async createGarden() {
-      const res = await fetch("/api/v1/gardens", {
+      const res = await fetch(BASE + "api/v1/gardens", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "My Garden" })
       });
@@ -19,12 +30,12 @@
       return res.json();
     },
     async getEntities(gid) {
-      const res = await fetch(`/api/v1/gardens/${gid}/entities`);
+      const res = await fetch(`${BASE}api/v1/gardens/${gid}/entities`);
       if (!res.ok) throw new Error("getEntities failed: " + res.status);
       return res.json();
     },
     async addEntity(gid, body) {
-      const res = await fetch(`/api/v1/gardens/${gid}/entities`, {
+      const res = await fetch(`${BASE}api/v1/gardens/${gid}/entities`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
@@ -32,7 +43,7 @@
       return res.json();
     },
     async updateEntity(gid, eid, body) {
-      const res = await fetch(`/api/v1/gardens/${gid}/entities/${eid}`, {
+      const res = await fetch(`${BASE}api/v1/gardens/${gid}/entities/${eid}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
@@ -40,40 +51,40 @@
       return res.json();
     },
     async deleteEntity(gid, eid) {
-      const res = await fetch(`/api/v1/gardens/${gid}/entities/${eid}`, { method: "DELETE" });
+      const res = await fetch(`${BASE}api/v1/gardens/${gid}/entities/${eid}`, { method: "DELETE" });
       if (!res.ok && res.status !== 404) throw new Error("deleteEntity failed: " + res.status);
     },
     async searchCrops(q) {
-      const res = await fetch(`/api/v1/crops?q=${encodeURIComponent(q || "")}&limit=12`);
+      const res = await fetch(`${BASE}api/v1/crops?q=${encodeURIComponent(q || "")}&limit=12`);
       if (!res.ok) return [];
       return res.json();
     },
     async listPhotos(gid, eid) {
-      const res = await fetch(`/api/v1/gardens/${gid}/entities/${eid}/photos`);
+      const res = await fetch(`${BASE}api/v1/gardens/${gid}/entities/${eid}/photos`);
       if (!res.ok) return [];
       return res.json();
     },
     async uploadPhoto(gid, eid, file) {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch(`/api/v1/gardens/${gid}/entities/${eid}/photos`, {
+      const res = await fetch(`${BASE}api/v1/gardens/${gid}/entities/${eid}/photos`, {
         method: "POST", body: fd
       });
       if (!res.ok) throw new Error("uploadPhoto failed: " + res.status);
       return res.json();
     },
     async deletePhoto(gid, eid, pid) {
-      const res = await fetch(`/api/v1/gardens/${gid}/entities/${eid}/photos/${pid}`, { method: "DELETE" });
+      const res = await fetch(`${BASE}api/v1/gardens/${gid}/entities/${eid}/photos/${pid}`, { method: "DELETE" });
       if (!res.ok && res.status !== 404) throw new Error("deletePhoto failed: " + res.status);
     },
     async advisorStatus() {
       try {
-        const res = await fetch("/api/v1/advisor/status");
+        const res = await fetch(BASE + "api/v1/advisor/status");
         return res.ok ? res.json() : { configured: false };
       } catch { return { configured: false }; }
     },
     async ask(gid, question) {
-      const res = await fetch("/api/v1/advisor/ask", {
+      const res = await fetch(BASE + "api/v1/advisor/ask", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ gardenId: gid, question })
       });
@@ -84,19 +95,19 @@
       const fd = new FormData();
       fd.append("file", file);
       if (description) fd.append("description", description);
-      const res = await fetch(`/api/v1/advisor/diagnose/${gid}/${eid}`, {
+      const res = await fetch(`${BASE}api/v1/advisor/diagnose/${gid}/${eid}`, {
         method: "POST", body: fd
       });
       if (!res.ok) throw new Error("diagnose failed: " + res.status);
       return res.json();
     },
     async calendar(gid) {
-      const res = await fetch(`/api/v1/advisor/calendar/${gid}`);
+      const res = await fetch(`${BASE}api/v1/advisor/calendar/${gid}`);
       if (!res.ok) throw new Error("calendar failed: " + res.status);
       return res.json();
     },
     async scanNudges(gid) {
-      const res = await fetch(`/api/v1/advisor/nudges/${gid}`);
+      const res = await fetch(`${BASE}api/v1/advisor/nudges/${gid}`);
       if (!res.ok) return [];
       return res.json();
     },
@@ -787,7 +798,7 @@
       return;
     }
     connection = new signalR.HubConnectionBuilder()
-      .withUrl("/hubs/garden")
+      .withUrl(BASE + "hubs/garden")
       .withAutomaticReconnect([0, 1000, 2000, 5000, 10000])
       .configureLogging(signalR.LogLevel.Warning)
       .build();
