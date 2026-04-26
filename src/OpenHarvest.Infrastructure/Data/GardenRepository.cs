@@ -20,6 +20,9 @@ public class GardenRepository : IGardenRepository
         return garden;
     }
 
+    public Task<List<Guid>> ListGardenIdsAsync(CancellationToken ct = default) =>
+        _db.Gardens.AsNoTracking().Select(g => g.Id).ToListAsync(ct);
+
     public Task<List<GardenEntity>> GetEntitiesAsync(Guid gardenId, CancellationToken ct = default) =>
         _db.Entities
             .AsNoTracking()

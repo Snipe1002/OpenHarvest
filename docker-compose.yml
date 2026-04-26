@@ -89,6 +89,19 @@ services:
       redis:
         condition: service_healthy
 
+  worker:
+    build:
+      context: .
+      dockerfile: src/OpenHarvest.Worker/Dockerfile
+    container_name: openharvest-worker
+    restart: unless-stopped
+    environment:
+      - DOTNET_ENVIRONMENT=Development
+      - Worker__ApiBaseUrl=http://api:5000
+      - Worker__NudgeScanIntervalSeconds=300
+    depends_on:
+      - api
+
 volumes:
   postgres-data:
   redis-data:

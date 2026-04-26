@@ -33,6 +33,13 @@ public class GardensController : ControllerBase
         return CreatedAtAction(nameof(Get), new { id = garden.Id }, garden);
     }
 
+    [HttpGet("ids")]
+    public async Task<ActionResult<List<Guid>>> ListIds(CancellationToken ct)
+    {
+        var ids = await _repo.ListGardenIdsAsync(ct);
+        return Ok(ids);
+    }
+
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<Garden>> Get(Guid id, CancellationToken ct)
     {
