@@ -103,6 +103,21 @@ builder.Services.AddSingleton<GardenBroadcaster>();
 
 var app = builder.Build();
 
+// Optional path-base prefix — lets the app live at e.g. /openharvest/ behind a reverse
+// proxy that does NOT strip the prefix. Off by default (empty string). Set
+// OpenHarvest__PathBase=/openharvest (env var) or "OpenHarvest:PathBase" (config) to
+// enable. When the proxy already strips the prefix (e.g. Caddy `handle_path`), leave
+// this unset — the static `<base href="./">` in index.html handles client-side resolution.
+var pathBase = builder.Configuration["OpenHarvest:PathBase"];
+if (!string.IsNullOrWhiteSpace(pathBase))
+{
+    if (!pathBase.StartsWith('/')) pathBase = "/" + pathBase;
+    pathBase = pathBase.TrimEnd('/');
+    app.UsePathBase(pathBase);
+    // Echo the prefix so a static index.html can read it if it ever needs to (debug aid).
+    app.MapGet("/__pathbase", () => Results.Json(new { pathBase }));
+}
+
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<OpenHarvestDbContext>();
