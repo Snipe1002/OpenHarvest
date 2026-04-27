@@ -323,11 +323,53 @@
   let pendingPrefabRef = null;
 
   // ---------- Phase 5.0 selection state ----------
-  // selectedEntityId is the id of the entity currently shown in the edit panel.
+  // selectedEntityId is the id of the entity currently shown in the toolbar.
   // lastSelectedMesh is tracked separately so we can clear the outline cleanly even when the
   // mesh has been disposed and recreated by the upsert pipeline.
   let selectedEntityId = null;
   let lastSelectedMesh = null;
+
+  // ---------- Phase 5.2.1 units + snap state ----------
+  // Storage on the server is always feet (the engine unit). The frontend converts on display
+  // and converts back on save, so all PATCH bodies are in ft regardless of the chosen unit.
+  // Snap is also stored as feet (the on-grid quantum). 0 means "off".
+  const UnitFactor = { ft: 1, in: 12, cm: 30.48 };
+  const UnitCycle = ["ft", "in", "cm"];
+  const SnapCycle = [
+    { label: "off",   ft: 0 },
+    { label: "1 in",  ft: 1 / 12 },
+    { label: "6 in",  ft: 0.5 },
+    { label: "1 ft",  ft: 1 },
+    { label: "30 cm", ft: 30 / 30.48 },
+  ];
+  let currentUnit = localStorage.getItem("openharvest.unit") || "ft";
+  if (!UnitFactor[currentUnit]) currentUnit = "ft";
+  let snapFt = parseFloat(localStorage.getItem("openharvest.snap")) || 0;
+  if (!isFinite(snapFt) || snapFt < 0) snapFt = 0;
+
+  function fromFt(v, unit = currentUnit) { return v * UnitFactor[unit]; }
+  function toFt(v, unit = currentUnit)   { return v / UnitFactor[unit]; }
+  function applySnap(v, snap = snapFt)   { return snap > 0 ? Math.round(v / snap) * snap : v; }
+  function applySnapVec(p) {
+    return { x: applySnap(p.x), y: p.y, z: applySnap(p.z) };
+  }
+  function formatNum(v) {
+    // 2 decimals for ft (sub-foot resolution matters for raised beds), 1 for in/cm where
+    // values are already chunkier and 1.4 cm vs 1.42 cm is noise.
+    const dp = currentUnit === "ft" ? 2 : 1;
+    return (+v).toFixed(dp).replace(/\.?0+$/, "") || "0";
+  }
+  function formatPos(p) {
+    if (!p) return `(0, 0, 0) ${currentUnit}`;
+    const x = formatNum(fromFt(+p.x || 0));
+    const y = formatNum(fromFt(+p.y || 0));
+    const z = formatNum(fromFt(+p.z || 0));
+    return `(${x}, ${y}, ${z}) ${currentUnit}`;
+  }
+  function snapLabel() {
+    const found = SnapCycle.find(s => Math.abs(s.ft - snapFt) < 1e-6);
+    return found ? found.label : "off";
+  }
 
   function setMode(next) {
     mode = next;
@@ -473,15 +515,18 @@
     const w = Math.max(0.5, maxX - minX);
     const d = Math.max(0.5, maxZ - minZ);
     const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
+    // Phase 5.2.1: snap-to-grid quantizes the centre + size on placement so freshly placed
+    // beds line up with previously placed entities under the same snap setting.
+    const snapped = applySnapVec({ x: cx, y: 0, z: cz });
     const body = {
       kind: "Bed",
       name: "Bed",
       transform: {
-        position: { x: cx, y: 0, z: cz },
+        position: snapped,
         rotation: { x: 0, y: 0, z: 0, w: 1 },
         scale: { x: 1, y: 1, z: 1 },
       },
-      geometry: { kind: "Box", size: { x: w, y: 0.4, z: d } }
+      geometry: { kind: "Box", size: { x: applySnap(w) || w, y: 0.4, z: applySnap(d) || d } }
     };
     setStatus("placing bed...");
     const created = await Api.addEntity(gardenId, body);
@@ -493,13 +538,14 @@
     // Find the bed underneath, if any, to set ParentId — Phase 1 hierarchy enforcement is loose:
     // we attach to whichever bed contains the click point, else null.
     const parentId = findContainingBed(p);
+    const snapped = applySnapVec({ x: p.x, y: 0, z: p.z });
     const body = {
       kind: "Plant",
       name: crop ? crop.commonName : "Plant",
       cropRef: crop ? crop.slug : null,
       parentId: parentId,
       transform: {
-        position: { x: p.x, y: 0, z: p.z },
+        position: snapped,
         rotation: { x: 0, y: 0, z: 0, w: 1 },
         scale: { x: 1, y: 1, z: 1 },
       },
@@ -521,11 +567,12 @@
     // Prefabs default to the "Bed" semantic kind — users place them into the world the same
     // way as raised beds. A future Phase could introduce a "Prefab" entity kind, but reusing
     // Bed lets the existing parent-of-plant logic work without a backend migration.
+    const snapped = applySnapVec({ x: p.x, y: 0, z: p.z });
     const body = {
       kind: "Bed",
       name: prefab.name,
       transform: {
-        position: { x: p.x, y: 0, z: p.z },
+        position: snapped,
         rotation: { x: 0, y: 0, z: 0, w: 1 },
         scale: { x: 1, y: 1, z: 1 },
       },
@@ -993,8 +1040,10 @@
     const followPointer = () => {
       const p = pickGround();
       if (!p) return;
-      rec.mesh.position.x = p.x;
-      rec.mesh.position.z = p.z;
+      // Phase 5.2.1: when snap is active, quantize live during the drag so the user gets
+      // visible stair-step feedback against the chosen grid (not just on release).
+      rec.mesh.position.x = applySnap(p.x);
+      rec.mesh.position.z = applySnap(p.z);
     };
 
     const cleanup = () => {
@@ -1035,9 +1084,9 @@
           },
         });
         rec.entity = updated;
-        // Phase 5.0: refresh the edit panel inputs if this is the selected entity.
-        if (selectedEntityId === eid) renderEditPanel(updated);
-        setStatus(`moved to (${newPos.x.toFixed(1)}, ${newPos.z.toFixed(1)})`);
+        // Phase 5.2.1: refresh the toolbar's position chip if this is the selected entity.
+        if (selectedEntityId === eid) renderToolbar(updated);
+        setStatus(`moved to ${formatPos(newPos)}`);
       } catch (e) {
         console.error(e);
         // Snap back on server failure so client state matches truth.
@@ -1075,41 +1124,48 @@
     window.addEventListener("keydown", onKey, true);
   }
 
-  // ---------- resize bed modal ----------
-  // Beds store their footprint in geometry.size (x = width, z = depth, y = thickness).
-  // We expose width and depth as feet-style inputs (the canonical engine unit is 1 unit ≈
-  // 1 foot). Server accepts the full Geometry on PATCH, so we send a fresh Box with the
-  // existing thickness preserved.
+  // ---------- resize modal ----------
+  // Phase 5.2.1: handles Beds (Box geometry, 2 axes: width + depth) and Prefabs (3 axes:
+  // width + height + depth). All inputs are in the user's chosen unit; we convert to feet
+  // before PATCH. Prefab clamps come from the prefab definition's min/max; Box beds use the
+  // historical 1–30 ft range. For prefabs whose Y has fixed proportions (Stake, Trellis,
+  // Fence) the height field is hidden — those builders only react to X/Z anyway.
   async function openResizeModal(eid) {
     const rec = meshRegistry.get(eid);
     if (!rec || rec.entity.kind !== "Bed") return;
-    // Phase 5.2: prefab-geometry beds are sized through the persistent edit panel (which has
-    // a clamped 3-axis size editor). Steer the user there instead of squashing the prefab
-    // through the legacy 2-axis Box resizer, which would discard prefabRef on save.
-    if (rec.entity.geometry?.kind === "Prefab") {
-      selectEntity(eid);
-      setStatus("use the edit panel to resize this prefab");
-      return;
-    }
-    const size = rec.entity.geometry?.size || { x: 4, y: 0.4, z: 4 };
+    const g = rec.entity.geometry || {};
+    const isPrefab = g.kind === "Prefab";
+    const prefabDef = isPrefab ? (window.OpenHarvestPrefabs?.[g.prefabRef] || null) : null;
+    const sizeDefault = (isPrefab && prefabDef) ? prefabDef.defaultSize : { x: 4, y: 0.4, z: 4 };
+    const size = g.size || sizeDefault;
+    const minSize = (isPrefab && prefabDef) ? prefabDef.minSize : { x: 1, y: 0.4, z: 1 };
+    const maxSize = (isPrefab && prefabDef) ? prefabDef.maxSize : { x: 30, y: 30, z: 30 };
+    // Prefabs with fixed Y proportions (the ratio is baked into the builder): Stake, Trellis,
+    // Fence — surfacing a height input would mislead the user. Detect by the prefab's slug.
+    const fixedHeightPrefabs = new Set(["stake", "trellis-flat", "fence-section"]);
+    const showHeight = isPrefab && !fixedHeightPrefabs.has(g.prefabRef);
+
+    const u = currentUnit;
     closeModal();
     const backdrop = document.createElement("div");
     backdrop.className = "modal-backdrop";
     const modal = document.createElement("div");
     modal.className = "modal";
     modal.innerHTML = `
-      <h2>Resize bed</h2>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <h2>Resize${isPrefab && prefabDef ? ` ${escapeHtml(prefabDef.icon || "")} ${escapeHtml(prefabDef.name)}` : " bed"} (${escapeHtml(u)})</h2>
+      <div style="display:grid;grid-template-columns:${showHeight ? "1fr 1fr 1fr" : "1fr 1fr"};gap:8px;">
         <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim);">
-          Width (ft)
-          <input type="number" data-field="w" min="1" max="30" step="0.5" />
+          Width <input type="number" data-field="w" step="any" />
         </label>
+        ${showHeight ? `
         <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim);">
-          Depth (ft)
-          <input type="number" data-field="d" min="1" max="30" step="0.5" />
+          Height <input type="number" data-field="h" step="any" />
+        </label>` : ""}
+        <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim);">
+          Depth <input type="number" data-field="d" step="any" />
         </label>
       </div>
-      <div class="ai-meta" style="margin-top:8px;">Allowed range: 1.0 – 30.0 ft per side.</div>
+      <div class="ai-meta" style="margin-top:8px;">Range: ${formatNum(fromFt(minSize.x))}–${formatNum(fromFt(maxSize.x))} ${escapeHtml(u)} (W) ${showHeight ? `· ${formatNum(fromFt(minSize.y))}–${formatNum(fromFt(maxSize.y))} ${escapeHtml(u)} (H)` : ""} · ${formatNum(fromFt(minSize.z))}–${formatNum(fromFt(maxSize.z))} ${escapeHtml(u)} (D).</div>
       <div class="modal-actions">
         <button data-act="cancel">Cancel</button>
         <button class="primary" data-act="save">Save</button>
@@ -1120,46 +1176,61 @@
     activeModal = backdrop;
 
     const wInput = modal.querySelector('input[data-field="w"]');
+    const hInput = modal.querySelector('input[data-field="h"]');
     const dInput = modal.querySelector('input[data-field="d"]');
-    wInput.value = (Number(size.x) || 4).toFixed(1);
-    dInput.value = (Number(size.z) || 4).toFixed(1);
+    wInput.value = formatNum(fromFt(+size.x || sizeDefault.x));
+    if (hInput) hInput.value = formatNum(fromFt(+size.y || sizeDefault.y));
+    dInput.value = formatNum(fromFt(+size.z || sizeDefault.z));
 
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
     const save = async () => {
-      const w = parseFloat(wInput.value);
-      const d = parseFloat(dInput.value);
-      if (!isFinite(w) || !isFinite(d) || w < 1 || w > 30 || d < 1 || d > 30) {
-        setStatus("size must be between 1 and 30 ft per side");
-        return;
+      const wRaw = parseFloat(wInput.value);
+      const dRaw = parseFloat(dInput.value);
+      const hRaw = hInput ? parseFloat(hInput.value) : null;
+      if (!isFinite(wRaw) || !isFinite(dRaw) || (hInput && !isFinite(hRaw))) {
+        setStatus("invalid number"); return;
       }
+      // Convert from the chosen unit to feet, then clamp to the prefab/bed bounds.
+      const w = clamp(toFt(wRaw), minSize.x, maxSize.x);
+      const d = clamp(toFt(dRaw), minSize.z, maxSize.z);
+      const h = hInput
+        ? clamp(toFt(hRaw), minSize.y, maxSize.y)
+        : (Number(size.y) || sizeDefault.y);
       closeModal();
       try {
-        const updated = await Api.updateEntity(gardenId, eid, {
-          geometry: {
-            kind: "Box",
-            size: { x: w, y: Number(size.y) || 0.4, z: d },
-          },
-        });
-        // Geometry changed — easiest path is to dispose + recreate the mesh from the server
-        // payload. SignalR will broadcast the same upsert; applyEntityUpsert is idempotent.
+        const newGeometry = isPrefab
+          ? { kind: "Prefab", prefabRef: g.prefabRef, size: { x: w, y: h, z: d } }
+          : { kind: "Box", size: { x: w, y: h, z: d } };
+        const updated = await Api.updateEntity(gardenId, eid, { geometry: newGeometry });
+        // Geometry changed — dispose + recreate the mesh from the server payload. SignalR
+        // will broadcast the same upsert; applyEntityUpsert is idempotent.
         disposeEntity(eid);
         meshForEntity(updated);
-        // Phase 5.0: keep panel coherent.
         if (selectedEntityId === eid) selectEntity(eid);
-        setStatus(`resized to ${w.toFixed(1)}×${d.toFixed(1)}`);
+        const dimList = hInput
+          ? `${formatNum(fromFt(w))}×${formatNum(fromFt(h))}×${formatNum(fromFt(d))} ${u}`
+          : `${formatNum(fromFt(w))}×${formatNum(fromFt(d))} ${u}`;
+        setStatus(`resized to ${dimList}`);
       } catch (e) { console.error(e); setStatus("resize failed"); }
     };
 
-    wInput.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { save(); ev.preventDefault(); } else if (ev.key === "Escape") closeModal(); });
-    dInput.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { save(); ev.preventDefault(); } else if (ev.key === "Escape") closeModal(); });
+    [wInput, hInput, dInput].filter(Boolean).forEach((el) => {
+      el.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") { save(); ev.preventDefault(); }
+        else if (ev.key === "Escape") closeModal();
+      });
+    });
     backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) closeModal(); });
     modal.querySelector('[data-act="cancel"]').addEventListener("click", () => closeModal());
     modal.querySelector('[data-act="save"]').addEventListener("click", () => save());
     setTimeout(() => { wInput.focus(); wInput.select(); }, 50);
   }
 
-  // ---------- Phase 5.0 selection + persistent edit panel ----------
+  // ---------- Phase 5.2.1 selection + slim toolbar ----------
   // selectEntity/clearSelection are the single entry points for changing what's in the
-  // panel. They also own the Babylon outline state so highlight + panel never drift apart.
+  // toolbar. They own the Babylon outline state so highlight + toolbar never drift apart.
+  // The toolbar replaces the Phase 5.0 right-side panel, which covered ~60% of the mobile
+  // viewport. Now the scene stays visible and the toolbar floats above the bottom buttons.
   function selectEntity(eid) {
     // Clear the previous outline first — even if we're re-selecting the same entity, the
     // mesh may have been disposed and recreated (upsert path).
@@ -1173,8 +1244,7 @@
     rec.mesh.renderOutline = true;
     rec.mesh.outlineWidth = 0.05;
     rec.mesh.outlineColor = new BABYLON.Color3(0.30, 0.85, 0.45);
-    renderEditPanel(rec.entity);
-    document.getElementById("editPanel").classList.add("open");
+    renderToolbar(rec.entity);
   }
 
   function clearSelection() {
@@ -1183,123 +1253,146 @@
     }
     selectedEntityId = null;
     lastSelectedMesh = null;
-    const panel = document.getElementById("editPanel");
-    panel.classList.remove("open");
-    // Reset to empty-state markup so the next open doesn't briefly flash stale data.
-    const content = panel.querySelector(".ep-content");
-    if (content) content.innerHTML = `<div class="ep-empty">Tap a bed or plant to edit</div>`;
+    const tb = document.getElementById("toolbar");
+    if (tb) tb.classList.add("hidden");
   }
 
-  function renderEditPanel(entity) {
-    const content = document.querySelector("#editPanel .ep-content");
-    if (!entity) {
-      content.innerHTML = `<div class="ep-empty">Tap a bed or plant to edit</div>`;
-      return;
-    }
-    const t = entity.transform || {};
-    const pos = t.position || { x: 0, y: 0, z: 0 };
+  // Render the toolbar against the given entity. Called any time the selection or unit
+  // changes; cheap because the toolbar is a small set of nodes already in the DOM.
+  function renderToolbar(entity) {
+    const tb = document.getElementById("toolbar");
+    if (!tb) return;
+    if (!entity) { tb.classList.add("hidden"); return; }
+    tb.classList.remove("hidden");
+
     const g = entity.geometry || {};
-    // Phase 5.2: prefab geometry. Prefab entities are stored as kind=Bed today (so they
-    // parent plants the same way raised beds do) but their geometry.kind === "Prefab" picks
-    // them out for size+display tweaks. We resolve the prefab definition once here so the
-    // header can show the icon + display name, and the size editor can clamp to the prefab's
-    // own min/max bounds.
     const isPrefab = g.kind === "Prefab";
     const prefabDef = isPrefab ? (window.OpenHarvestPrefabs?.[g.prefabRef] || null) : null;
-    const sizeDefault = (isPrefab && prefabDef) ? prefabDef.defaultSize : { x: 1, y: 1, z: 1 };
-    const size = g.size || sizeDefault;
-    const isBed = entity.kind === "Bed" && !isPrefab;
     const isPlant = entity.kind === "Plant";
-    // Size bounds for the inputs. Beds use the historical 1–30 ft range; prefabs use whatever
-    // the prefab declared. Plants don't get size editors.
-    const minSize = (isPrefab && prefabDef) ? prefabDef.minSize : { x: 1, y: 0.4, z: 1 };
-    const maxSize = (isPrefab && prefabDef) ? prefabDef.maxSize : { x: 30, y: 30, z: 30 };
-    const headerLabel = isPrefab
-      ? `${prefabDef?.icon || "📦"} ${escapeHtml(prefabDef?.name || g.prefabRef || "Prefab")}: ${escapeHtml(entity.name || "")}`
-      : `${escapeHtml(entity.kind)}: ${escapeHtml(entity.name || "")}`;
-    content.innerHTML = `
-      <div class="ep-header">
-        <span>${headerLabel}</span>
-        <span class="ep-close" data-act="close" title="Close">×</span>
+    const isBed = entity.kind === "Bed";
+    // Resize is only meaningful when geometry has user-tweakable size. Plants don't expose
+    // a size editor; everything else (Beds + Prefabs) does.
+    const canResize = isBed;
+
+    const icon = isPrefab ? (prefabDef?.icon || "📦")
+               : isPlant  ? "🌱"
+               : isBed    ? "🟫"
+                          : "📦";
+    const name = entity.name || (isPrefab ? (prefabDef?.name || "Prefab") : entity.kind || "");
+
+    tb.querySelector(".tb-icon").textContent = icon;
+    const nameEl = tb.querySelector(".tb-name");
+    nameEl.textContent = name;
+    nameEl.title = `Rename "${name}"`;
+    const posEl = tb.querySelector(".tb-pos");
+    posEl.textContent = formatPos(entity.transform?.position);
+
+    // Wire each action. We replace the whole listener set on every render (selection change)
+    // by cloning the action span — simpler than tracking individual handlers and avoids the
+    // double-fire bug if the same entity is re-selected after an upsert.
+    const eid = entity.id;
+    const actions = tb.querySelector(".tb-actions");
+    const fresh = actions.cloneNode(true);
+    actions.replaceWith(fresh);
+
+    fresh.querySelector('[data-act="photo"]').addEventListener("click", () => openPhotosModal(eid));
+    const diagBtn = fresh.querySelector('[data-act="diagnose"]');
+    diagBtn.disabled = !isPlant;
+    diagBtn.title = isPlant ? "Diagnose with photo" : "Diagnose is for plants only";
+    if (isPlant) diagBtn.addEventListener("click", () => openPhotosModal(eid));
+    const resizeBtn = fresh.querySelector('[data-act="resize"]');
+    resizeBtn.disabled = !canResize;
+    resizeBtn.title = canResize ? "Resize" : "Plants don't have a size editor";
+    if (canResize) resizeBtn.addEventListener("click", () => openResizeModal(eid));
+    fresh.querySelector('[data-act="move"]').addEventListener("click", () => startMove(eid));
+    fresh.querySelector('[data-act="duplicate"]').addEventListener("click", () => duplicateEntityById(eid));
+    fresh.querySelector('[data-act="delete"]').addEventListener("click", () => deleteEntityById(eid));
+
+    // Re-bind the persistent header bits (icon doesn't react, but name/pos/close do).
+    nameEl.onclick = () => openRenameModal(eid);
+    posEl.onclick = () => openPositionModal(eid);
+    tb.querySelector(".tb-close").onclick = clearSelection;
+  }
+
+  // Duplicate the entity with a +1 ft X offset (plus snap if active). Pulled out of the old
+  // renderEditPanel so both the toolbar and any future caller can share the same pipeline.
+  async function duplicateEntityById(eid) {
+    const rec = meshRegistry.get(eid);
+    if (!rec) return;
+    const entity = rec.entity;
+    const pos = entity.transform?.position || { x: 0, y: 0, z: 0 };
+    const offset = 1.0;
+    const newPos = applySnapVec({ x: pos.x + offset, y: pos.y, z: pos.z });
+    const body = {
+      kind: entity.kind,
+      name: entity.name,
+      cropRef: entity.cropRef,
+      parentId: entity.parentId,
+      transform: {
+        position: newPos,
+        rotation: { x: 0, y: 0, z: 0, w: 1 },
+        scale: entity.transform?.scale || { x: 1, y: 1, z: 1 },
+      },
+      geometry: entity.geometry,
+    };
+    try {
+      const created = await Api.addEntity(gardenId, body);
+      if (!meshRegistry.has(created.id)) meshForEntity(created);
+      selectEntity(created.id);
+      setStatus("duplicated");
+    } catch (e) { console.error(e); setStatus("duplicate failed"); }
+  }
+
+  // ---------- Phase 5.2.1 position modal ----------
+  // Numeric X/Y/Z inputs in the chosen unit, opened by tapping the toolbar position chip.
+  // Converts to feet on save and applies the active snap before PATCH.
+  function openPositionModal(eid) {
+    const rec = meshRegistry.get(eid);
+    if (!rec) return;
+    const entity = rec.entity;
+    const pos = entity.transform?.position || { x: 0, y: 0, z: 0 };
+    closeModal();
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.innerHTML = `
+      <h2>Position (${escapeHtml(currentUnit)})</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+        <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim);">
+          X <input type="number" data-field="x" step="any" />
+        </label>
+        <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim);">
+          Y <input type="number" data-field="y" step="any" />
+        </label>
+        <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim);">
+          Z <input type="number" data-field="z" step="any" />
+        </label>
       </div>
-      <div class="ep-section">
-        <label>Name</label>
-        <input type="text" id="ep-name" value="${escapeHtml(entity.name || "")}" placeholder="Entity name" />
-      </div>
-      ${isPlant ? `
-      <div class="ep-section">
-        <label>Crop</label>
-        <input type="text" id="ep-cropref" value="${escapeHtml(entity.cropRef || "")}" placeholder="Tap to change crop..." readonly />
-      </div>` : ""}
-      <div class="ep-section">
-        <label>Position (ft)</label>
-        <div class="ep-row">
-          <input type="number" id="ep-px" step="0.5" value="${(+pos.x).toFixed(2)}" title="X" />
-          <input type="number" id="ep-py" step="0.5" value="${(+pos.y).toFixed(2)}" title="Y" />
-          <input type="number" id="ep-pz" step="0.5" value="${(+pos.z).toFixed(2)}" title="Z" />
-        </div>
-      </div>
-      ${isBed ? `
-      <div class="ep-section">
-        <label>Size (ft)</label>
-        <div class="ep-row row-2">
-          <input type="number" id="ep-sw" min="1" max="30" step="0.5" value="${(+size.x).toFixed(1)}" title="Width" />
-          <input type="number" id="ep-sd" min="1" max="30" step="0.5" value="${(+size.z).toFixed(1)}" title="Depth" />
-        </div>
-      </div>` : ""}
-      ${isPrefab ? `
-      <div class="ep-section">
-        <label>Size (ft) — width / height / depth</label>
-        <div class="ep-row">
-          <input type="number" id="ep-pw" min="${minSize.x}" max="${maxSize.x}" step="0.5" value="${(+size.x).toFixed(2)}" title="Width" />
-          <input type="number" id="ep-ph" min="${minSize.y}" max="${maxSize.y}" step="0.5" value="${(+size.y).toFixed(2)}" title="Height" />
-          <input type="number" id="ep-pd" min="${minSize.z}" max="${maxSize.z}" step="0.5" value="${(+size.z).toFixed(2)}" title="Depth" />
-        </div>
-      </div>` : ""}
-      <div class="ep-section">
-        <label>Tags</label>
-        <div class="tags-stub">Tags coming in Phase 5.3</div>
-      </div>
-      <div class="ep-actions">
-        <button data-act="photo" title="Photo">📷</button>
-        ${isPlant
-          ? `<button data-act="diagnose" title="Diagnose">🔍</button>`
-          : `<button disabled title="Plants only">🔍</button>`}
-        <button data-act="duplicate" title="Duplicate">📋</button>
-        <button data-act="move" title="Move (drag)">🚚</button>
-        <button data-act="delete" class="danger" title="Delete">🗑</button>
+      <div class="ai-meta" style="margin-top:8px;">${snapFt > 0 ? `Values will snap to ${escapeHtml(snapLabel())}.` : "Snap is off."}</div>
+      <div class="modal-actions">
+        <button data-act="cancel">Cancel</button>
+        <button class="primary" data-act="save">Save</button>
       </div>
     `;
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    activeModal = backdrop;
 
-    const eid = entity.id;
+    const xInput = modal.querySelector('input[data-field="x"]');
+    const yInput = modal.querySelector('input[data-field="y"]');
+    const zInput = modal.querySelector('input[data-field="z"]');
+    xInput.value = formatNum(fromFt(+pos.x || 0));
+    yInput.value = formatNum(fromFt(+pos.y || 0));
+    zInput.value = formatNum(fromFt(+pos.z || 0));
 
-    // Name edit — opens existing rename modal so the same flow handles crop autocomplete.
-    const nameInput = content.querySelector("#ep-name");
-    if (nameInput) {
-      nameInput.addEventListener("focus", () => {
-        nameInput.blur();
-        openRenameModal(eid);
-      });
-    }
-
-    // Crop chip — Plants only. Tap → existing rename flow (which doubles as crop change for
-    // plants since it embeds the crop autocomplete).
-    if (isPlant) {
-      const cropInput = content.querySelector("#ep-cropref");
-      if (cropInput) {
-        cropInput.addEventListener("click", () => openRenameModal(eid));
-      }
-    }
-
-    // Position commit — PATCH on blur or Enter. Replace the mesh + label using the same
-    // dispose+recreate pipeline used by Resize so SignalR upserts and inline edits agree.
-    const px = content.querySelector("#ep-px");
-    const py = content.querySelector("#ep-py");
-    const pz = content.querySelector("#ep-pz");
-    const commitPos = async () => {
-      const newPos = { x: +px.value, y: +py.value, z: +pz.value };
-      // Skip the round-trip if nothing actually changed — avoids spurious SignalR fanout.
-      if (newPos.x === +pos.x && newPos.y === +pos.y && newPos.z === +pos.z) return;
+    const save = async () => {
+      const xv = parseFloat(xInput.value);
+      const yv = parseFloat(yInput.value);
+      const zv = parseFloat(zInput.value);
+      if (![xv, yv, zv].every(isFinite)) { setStatus("invalid number"); return; }
+      const newPos = applySnapVec({ x: toFt(xv), y: toFt(yv), z: toFt(zv) });
+      closeModal();
       try {
         const updated = await Api.updateEntity(gardenId, eid, {
           transform: {
@@ -1311,106 +1404,52 @@
         disposeEntity(eid);
         meshForEntity(updated);
         selectEntity(eid);
-        setStatus(`moved to (${newPos.x.toFixed(1)}, ${newPos.z.toFixed(1)})`);
+        setStatus(`moved to ${formatPos(newPos)}`);
       } catch (e) { console.error(e); setStatus("position update failed"); }
     };
-    for (const el of [px, py, pz]) {
-      if (!el) continue;
-      el.addEventListener("change", commitPos);
-      el.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); el.blur(); } });
-    }
 
-    if (isBed) {
-      const sw = content.querySelector("#ep-sw");
-      const sd = content.querySelector("#ep-sd");
-      const commitSize = async () => {
-        const w = Math.max(1, Math.min(30, +sw.value));
-        const d = Math.max(1, Math.min(30, +sd.value));
-        if (w === +size.x && d === +size.z) return;
-        try {
-          const updated = await Api.updateEntity(gardenId, eid, {
-            geometry: { kind: "Box", size: { x: w, y: Number(size.y) || 0.4, z: d } },
-          });
-          disposeEntity(eid);
-          meshForEntity(updated);
-          selectEntity(eid);
-          setStatus(`resized to ${w.toFixed(1)}×${d.toFixed(1)}`);
-        } catch (e) { console.error(e); setStatus("resize failed"); }
-      };
-      for (const el of [sw, sd]) {
-        if (!el) continue;
-        el.addEventListener("change", commitSize);
-        el.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); el.blur(); } });
-      }
-    }
-
-    if (isPrefab) {
-      // Prefab size editor — clamps to the prefab definition's own min/max so a Pot can't be
-      // accidentally sized like a Greenhouse. We send a fresh Geometry that preserves the
-      // prefabRef; the server stores it verbatim and SignalR fans out to peers, who resolve
-      // the same prefab definition and rebuild the mesh.
-      const pw = content.querySelector("#ep-pw");
-      const ph = content.querySelector("#ep-ph");
-      const pd = content.querySelector("#ep-pd");
-      const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, +v));
-      const commitPrefabSize = async () => {
-        const w = clamp(pw.value, minSize.x, maxSize.x);
-        const h = clamp(ph.value, minSize.y, maxSize.y);
-        const d = clamp(pd.value, minSize.z, maxSize.z);
-        if (w === +size.x && h === +size.y && d === +size.z) return;
-        try {
-          const updated = await Api.updateEntity(gardenId, eid, {
-            geometry: { kind: "Prefab", prefabRef: g.prefabRef, size: { x: w, y: h, z: d } },
-          });
-          disposeEntity(eid);
-          meshForEntity(updated);
-          selectEntity(eid);
-          setStatus(`resized to ${w.toFixed(1)}×${h.toFixed(1)}×${d.toFixed(1)}`);
-        } catch (e) { console.error(e); setStatus("resize failed"); }
-      };
-      for (const el of [pw, ph, pd]) {
-        if (!el) continue;
-        el.addEventListener("change", commitPrefabSize);
-        el.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); el.blur(); } });
-      }
-    }
-
-    // Header close.
-    content.querySelector('[data-act="close"]')?.addEventListener("click", clearSelection);
-
-    // Action row.
-    content.querySelector('[data-act="photo"]')?.addEventListener("click", () => openPhotosModal(eid));
-    // Diagnose lives inside the photos modal already; open it and let the user tap "Diagnose".
-    content.querySelector('[data-act="diagnose"]')?.addEventListener("click", () => openPhotosModal(eid));
-    content.querySelector('[data-act="duplicate"]')?.addEventListener("click", async () => {
-      // Offset +1.0 ft on X so the duplicate doesn't z-fight the original. Server returns the
-      // new entity, mesh appears via the existing upsert path; we then select it so the user
-      // can drag/resize without an extra tap.
-      const offset = 1.0;
-      const newPos = { x: pos.x + offset, y: pos.y, z: pos.z };
-      const body = {
-        kind: entity.kind,
-        name: entity.name,
-        cropRef: entity.cropRef,
-        parentId: entity.parentId,
-        transform: {
-          position: newPos,
-          rotation: { x: 0, y: 0, z: 0, w: 1 },
-          scale: entity.transform?.scale || { x: 1, y: 1, z: 1 },
-        },
-        geometry: entity.geometry,
-      };
-      try {
-        const created = await Api.addEntity(gardenId, body);
-        // SignalR will also upsert this; the registry is idempotent so a double-create is fine.
-        if (!meshRegistry.has(created.id)) meshForEntity(created);
-        selectEntity(created.id);
-        setStatus("duplicated");
-      } catch (e) { console.error(e); setStatus("duplicate failed"); }
+    [xInput, yInput, zInput].forEach((el) => {
+      el.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") { save(); ev.preventDefault(); }
+        else if (ev.key === "Escape") closeModal();
+      });
     });
-    content.querySelector('[data-act="move"]')?.addEventListener("click", () => startMove(eid));
-    content.querySelector('[data-act="delete"]')?.addEventListener("click", () => deleteEntityById(eid));
+    backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) closeModal(); });
+    modal.querySelector('[data-act="cancel"]').addEventListener("click", () => closeModal());
+    modal.querySelector('[data-act="save"]').addEventListener("click", () => save());
+    setTimeout(() => { xInput.focus(); xInput.select(); }, 50);
   }
+
+  // ---------- Phase 5.2.1 unit + snap chip wiring ----------
+  function refreshChipLabels() {
+    const u = document.getElementById("unitChip");
+    if (u) u.textContent = currentUnit;
+    const s = document.getElementById("snapChip");
+    if (s) s.textContent = `Snap: ${snapLabel()}`;
+  }
+  function cycleUnit() {
+    const i = UnitCycle.indexOf(currentUnit);
+    currentUnit = UnitCycle[(i + 1) % UnitCycle.length];
+    localStorage.setItem("openharvest.unit", currentUnit);
+    refreshChipLabels();
+    // Re-render the toolbar so the position chip + any open modal flips into the new unit.
+    if (selectedEntityId) {
+      const rec = meshRegistry.get(selectedEntityId);
+      if (rec) renderToolbar(rec.entity);
+    }
+    setStatus(`units: ${currentUnit}`);
+  }
+  function cycleSnap() {
+    const i = SnapCycle.findIndex(s => Math.abs(s.ft - snapFt) < 1e-6);
+    const next = SnapCycle[(i + 1) % SnapCycle.length];
+    snapFt = next.ft;
+    localStorage.setItem("openharvest.snap", String(snapFt));
+    refreshChipLabels();
+    setStatus(`snap: ${next.label}`);
+  }
+  document.getElementById("unitChip")?.addEventListener("click", cycleUnit);
+  document.getElementById("snapChip")?.addEventListener("click", cycleSnap);
+  refreshChipLabels();
 
   // ---------- live sync (SignalR) ----------
   let connection = null;
