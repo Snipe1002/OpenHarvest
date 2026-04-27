@@ -85,6 +85,13 @@ public class GardensController : ControllerBase
             ["square-planter"]   = new[] { "container" },
             ["terracotta-pot"]   = new[] { "container" },
             ["greenhouse-arch"]  = new[] { "greenhouse" },
+            // Phase 6.0 — house primitives. The advisor uses these tags to disambiguate "where
+            // is this plant" answers ("on the patio" vs "inside the greenhouse") and to feed
+            // future Phase 6.1+ wall-mounted shelf placement, so we keep them stable + lower-case.
+            ["floor-slab"]       = new[] { "floor" },
+            ["wall-segment"]     = new[] { "wall" },
+            ["door"]             = new[] { "wall", "door" },
+            ["window"]           = new[] { "wall", "window" },
         };
 
     [HttpPost("{id:guid}/entities")]
