@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Viewer } from '@pascal-app/viewer'
 import { CameraControls } from '@react-three/drei'
 import AddToolbar from './components/AddToolbar'
+import ClearHouseButton from './components/ClearHouseButton'
 import DemoGround from './components/DemoGround'
 import EditPanel from './components/EditPanel'
 import EntityRenderer from './components/EntityRenderer'
@@ -78,6 +79,7 @@ export default function App() {
         ))}
       </Viewer>
       {/* HTML overlays — siblings of the Viewer canvas, not R3F children. */}
+      <ClearHouseButton />
       <AddToolbar />
       <EditPanel />
     </div>

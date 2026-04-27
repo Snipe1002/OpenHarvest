@@ -1,26 +1,24 @@
 /**
  * DemoBed — raised garden bed: 4 wood plank walls + soil top.
  *
- * Renders from a backend `GardenEntity` whose geometry is either
+ * Renders from a backend `GardenEntity`. Geometry is either:
  *   - kind="Box" with `size = {x, y, z}`, or
  *   - kind="Prefab" with `prefabRef in {raised-bed-wood, square-planter}` and
- *     an optional `size` override (defaults to 2m x 0.4m x 1m).
+ *     an optional `size` override (defaults to 2m × 0.4m × 1m).
  *
- * Position comes from `entity.transform.position`. The y component is the
- * *bottom* of the frame (matching the original demo contract). Frame
- * thickness is fixed at 0.05m. Soil sits 0.02m below the frame top.
+ * Position and rotation come from `entity.transform`. Position is the
+ * *bottom-center* of the frame. Rotation is a quaternion {x, y, z, w} on
+ * the wire and gets applied to the group via Three's `Quaternion`.
  *
- * Selection (milestone #3): clicking any plank or the soil sets the entity
- * as the active selection in the Zustand store. When selected, a drei
- * `<Outlines>` wireframe overlay highlights the bed group.
- *
- * The "Demo" name is intentional — milestone #3 will replace this with a
- * full prefab catalog. Until then, every bed-shaped entity routes through
- * here.
+ * Selection: clicking any plank or the soil sets the entity as the active
+ * selection in the Zustand store. When selected, drei `<Outlines>` overlays
+ * highlight every plank.
  */
+import * as THREE from 'three'
+import { useMemo } from 'react'
 import { Outlines } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
-import type { GardenEntity } from '../api/types'
+import type { GardenEntity, Quaternion } from '../api/types'
 import { useGarden } from '../store/garden'
 
 interface DemoBedProps {
@@ -35,52 +33,69 @@ function resolveSize(entity: GardenEntity): [number, number, number] {
   return DEFAULT_SIZE
 }
 
+function quaternionToEuler(q: Quaternion): [number, number, number] {
+  const tq = new THREE.Quaternion(q.x, q.y, q.z, q.w)
+  const e = new THREE.Euler().setFromQuaternion(tq, 'XYZ')
+  return [e.x, e.y, e.z]
+}
+
 export default function DemoBed({ entity }: DemoBedProps) {
   const selectEntity = useGarden((s) => s.selectEntity)
   const isSelected = useGarden((s) => s.selectedEntityId === entity.id)
 
-  const { x: px, y: py, z: pz } = entity.transform.position
   const [w, h, l] = resolveSize(entity)
   const t = 0.05 // plank thickness
 
-  // Center of the bed in world space (y is mid-height).
-  const cx = px
-  const cy = py + h / 2
-  const cz = pz
+  const groupPosition: [number, number, number] = useMemo(
+    () => [entity.transform.position.x, entity.transform.position.y + h / 2, entity.transform.position.z],
+    [entity.transform.position.x, entity.transform.position.y, entity.transform.position.z, h],
+  )
+  const groupRotation = useMemo(
+    () => quaternionToEuler(entity.transform.rotation),
+    [
+      entity.transform.rotation.x,
+      entity.transform.rotation.y,
+      entity.transform.rotation.z,
+      entity.transform.rotation.w,
+    ],
+  )
 
   const handleSelect = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation()
     selectEntity(entity.id)
   }
 
+  // All plank/soil coords are RELATIVE to the group center (which sits at the
+  // bed's mid-height). Rotation on the group then rotates the whole bed
+  // together.
   return (
-    <group onPointerDown={handleSelect}>
+    <group position={groupPosition} rotation={groupRotation} onPointerDown={handleSelect}>
       {/* +X plank */}
-      <mesh position={[cx + w / 2 - t / 2, cy, cz]} castShadow receiveShadow>
+      <mesh position={[w / 2 - t / 2, 0, 0]} castShadow receiveShadow>
         <boxGeometry args={[t, h, l]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
         {isSelected && <Outlines thickness={4} color="#ffaa00" />}
       </mesh>
       {/* -X plank */}
-      <mesh position={[cx - w / 2 + t / 2, cy, cz]} castShadow receiveShadow>
+      <mesh position={[-w / 2 + t / 2, 0, 0]} castShadow receiveShadow>
         <boxGeometry args={[t, h, l]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
         {isSelected && <Outlines thickness={4} color="#ffaa00" />}
       </mesh>
       {/* +Z plank */}
-      <mesh position={[cx, cy, cz + l / 2 - t / 2]} castShadow receiveShadow>
+      <mesh position={[0, 0, l / 2 - t / 2]} castShadow receiveShadow>
         <boxGeometry args={[w, h, t]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
         {isSelected && <Outlines thickness={4} color="#ffaa00" />}
       </mesh>
       {/* -Z plank */}
-      <mesh position={[cx, cy, cz - l / 2 + t / 2]} castShadow receiveShadow>
+      <mesh position={[0, 0, -l / 2 + t / 2]} castShadow receiveShadow>
         <boxGeometry args={[w, h, t]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
         {isSelected && <Outlines thickness={4} color="#ffaa00" />}
       </mesh>
       {/* Soil — slightly inset, top sits 0.02m below frame top */}
-      <mesh position={[cx, py + h - 0.02 - (h - 0.04) / 2, cz]} receiveShadow>
+      <mesh position={[0, h / 2 - 0.02 - (h - 0.04) / 2, 0]} receiveShadow>
         <boxGeometry args={[w - 2 * t, h - 0.04, l - 2 * t]} />
         <meshStandardMaterial color="#3a2818" roughness={1.0} metalness={0} />
       </mesh>
