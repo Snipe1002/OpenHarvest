@@ -84,6 +84,44 @@ public class AdvisorController : ControllerBase
         return Ok(calendar);
     }
 
+    [HttpPost("plan/{gardenId:guid}")]
+    [EnableRateLimiting("advisor")]
+    public async Task<ActionResult<PlacementPlan>> Plan(Guid gardenId, [FromBody] PlanRequest req, CancellationToken ct)
+    {
+        if (req?.Crops is null || req.Crops.Count == 0) return BadRequest("no crops requested");
+
+        var context = await BuildGardenContext(gardenId, ct);
+        // Phase 5.5 — pull EVERY entity (beds, walls, shelves, plants...) so the planner can
+        // reason about containers and obstructions, not just current plantings.
+        var allEntities = await _gardens.GetEntitiesAsync(gardenId, ct);
+        var summaries = allEntities.Select(e => new EntitySummary
+        {
+            Id = e.Id.ToString(),
+            Name = e.Name,
+            Kind = e.Kind.ToString(),
+            CropRef = e.CropRef,
+            X = e.Transform.Position.X,
+            Y = e.Transform.Position.Y,
+            Z = e.Transform.Position.Z,
+            // Same parent-tag-merge trick we already use for the calendar/Ask paths so a plant in
+            // a tagged raised bed is treated as "raised" even when the bed carries the tag.
+            Tags = MergeTagsWithParent(e, allEntities),
+        }).ToList();
+
+        // Resolve catalog rows for the requested slugs. Unknown slugs are silently dropped — the
+        // planner can still suggest something meaningful as long as at least one slug resolves.
+        var crops = new List<Domain.Entities.Crop>();
+        foreach (var slug in req.Crops.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(slug)) continue;
+            var c = await _crops.GetBySlugAsync(slug, ct);
+            if (c is not null) crops.Add(c);
+        }
+
+        var plan = await _ai.SuggestPlacements(context, summaries, crops, ct);
+        return Ok(plan);
+    }
+
     [HttpPost("diagnose/{gardenId:guid}/{entityId:guid}")]
     [EnableRateLimiting("advisor-vision")]
     [RequestSizeLimit(50_000_000)]
@@ -212,3 +250,5 @@ public class AdvisorController : ControllerBase
 }
 
 public record AskRequest(Guid GardenId, string Question);
+
+public record PlanRequest(List<string> Crops);

@@ -190,6 +190,128 @@ public class ClaudeProvider : IAiProvider
         return ParseCalendar(text, model);
     }
 
+    public async Task<PlacementPlan> SuggestPlacements(
+        GardenContext context, IReadOnlyList<EntitySummary> existing, IReadOnlyList<Crop> requested, CancellationToken ct = default)
+    {
+        if (!IsConfigured)
+        {
+            return new PlacementPlan(Name, "(unconfigured)", new List<PlacementSuggestion>(),
+                "AI advisor not configured. Set CLAUDE_API_KEY in the environment.");
+        }
+
+        if (requested.Count == 0)
+        {
+            return new PlacementPlan(Name, "(skipped)", new List<PlacementSuggestion>(),
+                "No crops requested.");
+        }
+
+        // Phase 5.5 — flatten the scene into a per-entity bullet list. We include kind, position,
+        // crop ref, and tags so the planner has enough to reason about containers, walls, and
+        // existing plant proximity. Capped at 200 entities to keep the prompt bounded; pathological
+        // gardens with more entities will get a (truncated) signal.
+        var sceneSummary = new StringBuilder();
+        sceneSummary.AppendLine("Existing scene entities (id | kind | name | crop | x,y,z ft | tags):");
+        var capped = existing.Take(200);
+        foreach (var e in capped)
+        {
+            sceneSummary
+                .Append("- ").Append(e.Id).Append(" | ")
+                .Append(string.IsNullOrEmpty(e.Kind) ? "?" : e.Kind).Append(" | ")
+                .Append(e.Name).Append(" | ")
+                .Append(string.IsNullOrEmpty(e.CropRef) ? "-" : e.CropRef).Append(" | ")
+                .Append(e.X.ToString("0.##")).Append(',').Append(e.Y.ToString("0.##")).Append(',').Append(e.Z.ToString("0.##"))
+                .Append(" | ");
+            if (e.Tags is { Count: > 0 }) sceneSummary.Append(string.Join(",", e.Tags));
+            else sceneSummary.Append('-');
+            sceneSummary.AppendLine();
+        }
+
+        // Phase 5.5 — crop catalog summary. We cherry-pick fields the planner actually needs
+        // (zone, spacing, sow window). Crop currently has no SunNeeds/WaterNeeds columns, so we
+        // skip those — the planner falls back to general species knowledge from the system prompt.
+        var cropFacts = new StringBuilder();
+        cropFacts.AppendLine("Crops the user wants placed:");
+        foreach (var c in requested)
+        {
+            cropFacts.Append("- ").Append(c.Slug).Append(" (").Append(c.CommonName).Append(") ");
+            if (c.PlantSpacingInches.HasValue) cropFacts.Append("spacing=").Append(c.PlantSpacingInches).Append("in ");
+            if (c.RowSpacingInches.HasValue) cropFacts.Append("row=").Append(c.RowSpacingInches).Append("in ");
+            if (c.MinGrowingZone.HasValue || c.MaxGrowingZone.HasValue)
+                cropFacts.Append("zones=").Append(c.MinGrowingZone?.ToString() ?? "?")
+                    .Append('-').Append(c.MaxGrowingZone?.ToString() ?? "?").Append(' ');
+            if (c.CanDirectSow) cropFacts.Append("direct-sow ");
+            cropFacts.AppendLine();
+        }
+
+        var prompt =
+            $"Garden context:\n{ContextSummary(context)}\n\n" +
+            $"{sceneSummary}\n{cropFacts}\n" +
+            "World convention: +X is east, +Z is north, Y is up. Coordinates in feet, world-space. " +
+            "Return ONLY a JSON object with this schema:\n" +
+            "{ \"summary\": \"one paragraph plain-text overview of your plan\", " +
+            "\"suggestions\": [{ \"cropRef\": \"slug\", \"cropName\": \"display name\", " +
+            "\"position\": { \"x\": 0.0, \"z\": 0.0 }, \"parentEntityId\": null-or-\"guid\", " +
+            "\"rationale\": \"1-2 sentence why\" }] }\n" +
+            "When suggesting parentEntityId, only use ids that appear in the existing scene as raised beds, shelves, or other containers — null for in-ground placement. " +
+            "Honor crop spacing: do not place plants closer to each other than the crop's PlantSpacingInches. " +
+            "Honor sun needs: south-facing positions get more sun; consider walls that block sun. " +
+            "Always provide a rationale citing concrete scene features (a specific bed name, a wall, the south side, etc).";
+
+        var body = new
+        {
+            model = _opts.Model,
+            max_tokens = 4096,
+            system = GardeningSystemPrompt,
+            messages = new[]
+            {
+                new { role = "user", content = prompt }
+            }
+        };
+
+        var (text, model, _, _) = await CallMessages(body, ct);
+        return ParsePlacementPlan(text, model);
+    }
+
+    private PlacementPlan ParsePlacementPlan(string text, string model)
+    {
+        var s = text.Trim();
+        if (s.StartsWith("```"))
+        {
+            var firstNl = s.IndexOf('\n');
+            if (firstNl > 0) s = s[(firstNl + 1)..];
+            if (s.EndsWith("```")) s = s[..^3];
+            s = s.Trim();
+        }
+        try
+        {
+            var doc = JsonNode.Parse(s);
+            var summary = doc?["summary"]?.GetValue<string>();
+            var suggArr = doc?["suggestions"]?.AsArray();
+            var list = new List<PlacementSuggestion>();
+            if (suggArr is not null)
+            {
+                foreach (var n in suggArr)
+                {
+                    var slug = n?["cropRef"]?.GetValue<string>() ?? "";
+                    var nm = n?["cropName"]?.GetValue<string>() ?? slug;
+                    var posX = n?["position"]?["x"]?.GetValue<double>() ?? 0;
+                    var posZ = n?["position"]?["z"]?.GetValue<double>() ?? 0;
+                    // parentEntityId may be JSON null OR an actual string — JsonNode treats null
+                    // as a missing node, so the ?. chain returns null in either case. That's fine.
+                    var par = n?["parentEntityId"]?.GetValue<string>();
+                    var why = n?["rationale"]?.GetValue<string>() ?? "";
+                    list.Add(new PlacementSuggestion(slug, nm, new Coord(posX, posZ), par, why));
+                }
+            }
+            return new PlacementPlan(Name, model, list, summary);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "failed to parse placement plan");
+            return new PlacementPlan(Name, model, new List<PlacementSuggestion>(), "Couldn't parse AI response. Raw: " + s);
+        }
+    }
+
     private PlantingCalendar ParseCalendar(string text, string model)
     {
         // The model occasionally wraps JSON in code fences despite instructions; strip them.

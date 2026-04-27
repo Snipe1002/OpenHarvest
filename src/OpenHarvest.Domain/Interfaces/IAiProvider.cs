@@ -42,6 +42,19 @@ public interface IAiProvider
         GardenContext context,
         IReadOnlyList<Crop> cropCatalog,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Phase 5.5 — propose where to plant the requested crops within the user's existing scene.
+    /// Suggestions carry a world-space (X, Z) coordinate plus an optional parent entity id when
+    /// the planner thinks the crop should sit inside a raised bed / shelf / pot. Each suggestion
+    /// also carries a 1-2 sentence rationale grounded in concrete scene features so the user can
+    /// decide whether to commit it.
+    /// </summary>
+    Task<PlacementPlan> SuggestPlacements(
+        GardenContext context,
+        IReadOnlyList<EntitySummary> existing,
+        IReadOnlyList<Crop> requested,
+        CancellationToken ct = default);
 }
 
 /// <summary>The user's garden state at the moment of an AI request.</summary>
@@ -68,8 +81,32 @@ public class EntityContext
 
 public class EntitySummary
 {
+    /// <summary>
+    /// Phase 5.5 — entity GUID (string-encoded). Required so the placement planner can hand
+    /// back a `parentEntityId` referencing one of these rows; older callers that don't care
+    /// about identity can leave this empty.
+    /// </summary>
+    public string Id { get; set; } = string.Empty;
+
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Phase 5.5 — `EntityKind` as a string ("Bed", "Plant", "Structure"...). Lets the
+    /// advisor reason about scene topology (which entities can act as containers, which are
+    /// walls that block sun, etc.) without coupling the Domain to the prompt.
+    /// </summary>
+    public string Kind { get; set; } = string.Empty;
+
     public string? CropRef { get; set; }
+
+    /// <summary>Phase 5.5 — world-space east coordinate in feet.</summary>
+    public double X { get; set; }
+
+    /// <summary>Phase 5.5 — world-space up coordinate in feet (usually 0 for ground entities).</summary>
+    public double Y { get; set; }
+
+    /// <summary>Phase 5.5 — world-space north coordinate in feet.</summary>
+    public double Z { get; set; }
 
     /// <summary>
     /// Phase 5.3 — user-supplied tags propagated to the advisor so guidance can ground in
@@ -113,3 +150,25 @@ public enum CalendarTaskKind
     HarvestWindowEnd,
     Other,
 }
+
+// Phase 5.5 — AI-assisted placement.
+//
+// PlacementPlan is the response wrapper; each PlacementSuggestion is a single ghost-pin the
+// PWA renders in the 3D scene. Coordinates are world-space feet (x = east, z = north, y is
+// up but we don't return y here — the PWA puts ghost markers at ground level). The
+// `parentEntityId` field is OPTIONAL: null = in-ground / free-standing, otherwise a GUID
+// (string-encoded so the JSON shape matches what the PWA already expects).
+public record PlacementPlan(
+    string Provider,
+    string Model,
+    List<PlacementSuggestion> Suggestions,
+    string? Summary);
+
+public record PlacementSuggestion(
+    string CropRef,
+    string CropName,
+    Coord Position,
+    string? ParentEntityId,
+    string Rationale);
+
+public record Coord(double X, double Z);

@@ -118,7 +118,7 @@
     }
 
     /* floating advisor buttons */
-    #askButton, #calendarButton, #settingsButton {
+    #askButton, #calendarButton, #planButton, #settingsButton {
       position: fixed;
       top: env(safe-area-inset-top, 8px);
       background: var(--panel); color: var(--text);
@@ -128,13 +128,16 @@
     }
     #askButton { right: 8px; }
     #calendarButton { right: 92px; }
-    /* Phase 5.1: gear sits left of Calendar so the row reads (left → right):
-       ⚙ Settings · 📅 Calendar · 🌱 Ask. Width is roughly 80px per pill. */
-    #settingsButton { right: 176px; padding: 8px 12px; }
+    /* Phase 5.5 — Plan sits between Calendar and Settings. Reading the row
+       (left → right): ⚙ Settings · 🤖 Plan · 📅 Calendar · 🌱 Ask. Each pill is ~80px wide. */
+    #planButton { right: 184px; }
+    /* Phase 5.1: gear sits left of Plan so the chrome cluster keeps growing leftward. */
+    #settingsButton { right: 268px; padding: 8px 12px; }
     #askButton:active, #askButton.active,
     #calendarButton:active, #calendarButton.active,
+    #planButton:active, #planButton.active,
     #settingsButton:active, #settingsButton.active { background: var(--panel-hover); color: var(--accent); }
-    #askButton.unconfigured, #calendarButton.unconfigured { opacity: 0.5; }
+    #askButton.unconfigured, #calendarButton.unconfigured, #planButton.unconfigured { opacity: 0.5; }
 
     /* Phase 5.1: compass overlay. Sits below the floating buttons so it doesn't
        overlap the Ask/Calendar/Settings row (~48px tall). The whole element rotates
@@ -420,14 +423,15 @@
        ⚙ Settings (right:176, ~40px wide) · 📅 Calendar (right:92) · 🌱 Ask (right:8). The new
        chips sit further-left so the visual order reads (left→right): Snap · ft · ⚙ · 📅 · 🌱.
        Snap pill is the widest ("Snap: 1 ft"), so it gets a ~120px slot. */
-    #unitChip { right: 230px; min-width: 44px; text-align: center; }
-    #snapChip { right: 290px; min-width: 96px; text-align: center; }
+    /* Phase 5.5 — chip offsets shifted right by 92px (one extra pill) to make room for the new
+       Plan button in the floating advisor row. Original layout was 230/290/396; Plan added at
+       right:184 pushed Settings to 268, so each chip moves by +92px to keep the visual gap. */
+    #unitChip { right: 322px; min-width: 44px; text-align: center; }
+    #snapChip { right: 382px; min-width: 96px; text-align: center; }
     /* Phase 6.0: cut-away toggle. Sits left of the snap chip and reads as a single-emoji pill
        so the row stays compact on narrow phones. When ON, the chip uses the accent colour
-       to make the active state legible at a glance. The chip is the leftmost chrome in the
-       top row — beyond ~390px right-edge offset on a 360px viewport it would clip, so we
-       only add it once (no second variant). */
-    #cutawayChip { right: 396px; min-width: 56px; text-align: center; }
+       to make the active state legible at a glance. */
+    #cutawayChip { right: 488px; min-width: 56px; text-align: center; }
 
     /* Phase 5.2: prefab picker. Tile grid with category headers — feels native to a touch
        device with thumb-sized targets. Tapping a tile selects it and closes the modal. */
@@ -582,6 +586,57 @@
       border: 1px dashed var(--border); border-radius: 999px;
     }
     .tags-suggest-chip:hover { color: var(--accent); border-color: var(--accent); }
+
+    /* Phase 5.5 — Plan modal. Chip-input on top (selected crops), then a "Get suggestions"
+       button. Once we have results, the AI summary sits at the top and the suggestions list
+       below — each row has a "Place here" action that turns into a checkmark when committed. */
+    .plan-chips {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      min-height: 36px;
+      padding: 6px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-top: 8px;
+    }
+    .plan-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 4px 8px; font-size: 12px;
+      background: var(--panel-hover); color: var(--text);
+      border: 1px solid var(--border); border-radius: 999px;
+    }
+    .plan-chip .x {
+      cursor: pointer; color: var(--text-dim);
+      width: 14px; height: 14px; line-height: 14px; text-align: center;
+      border-radius: 50%;
+    }
+    .plan-chip .x:hover { background: var(--danger); color: var(--bg); }
+    .plan-list { max-height: 50vh; overflow-y: auto; margin-top: 12px; }
+    .plan-item {
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      background: var(--bg);
+    }
+    .plan-item.placed { opacity: 0.55; }
+    .plan-item .crop {
+      font-weight: 500; font-size: 14px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .plan-item .pos { color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .plan-item .why { color: var(--text-dim); font-size: 12px; margin-top: 4px; line-height: 1.4; }
+    .plan-item .row {
+      display: flex; align-items: center; gap: 8px; margin-top: 8px;
+    }
+    .plan-item .row button {
+      padding: 6px 10px; font-size: 12px;
+      background: var(--panel); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+    }
+    .plan-item .row button:hover { background: var(--panel-hover); border-color: var(--accent); }
+    .plan-item .row button.placed { color: var(--accent); border-color: var(--accent); cursor: default; }
+    .plan-actions-bar { display: flex; gap: 8px; margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -590,6 +645,9 @@
   <div id="sunPhase" class="hidden"></div>
   <button id="askButton" title="Ask the master gardener">🌱 Ask</button>
   <button id="calendarButton" title="Generate a planting calendar">📅 Calendar</button>
+  <!-- Phase 5.5 — AI-assisted placement. The user picks crops, the planner reads the scene and
+       proposes per-crop coordinates rendered as ghost pins in the 3D view; tap a pin to commit. -->
+  <button id="planButton" title="Plan with AI — let the advisor place crops for you">🤖 Plan</button>
   <button id="settingsButton" title="Garden settings (location)">⚙</button>
   <button id="unitChip" class="chip" title="Tap to cycle units (ft / in / cm)">ft</button>
   <button id="snapChip" class="chip" title="Tap to cycle snap-to-grid">Snap: off</button>
@@ -659,7 +717,7 @@
   <!-- Phase 5.2.2: cache-bust suffix bumps with each UX-polish revision so iPhone Safari
        (which aggressively caches JS) picks up the new build without a full app reset. Bump
        the number whenever app.js, prefabs.js, or this file changes. -->
-  <script src="lib/prefabs.js?v=601"></script>
-  <script src="app.js?v=601"></script>
+  <script src="lib/prefabs.js?v=605"></script>
+  <script src="app.js?v=605"></script>
 </body>
 </html>
