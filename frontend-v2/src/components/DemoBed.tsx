@@ -20,7 +20,7 @@ import { Outlines } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import type { GardenEntity, Quaternion } from '../api/types'
 import { useGarden } from '../store/garden'
-import { useTranslateDrag } from './useTranslateDrag'
+import { useGroupTranslateDrag, useTranslateDrag } from './useTranslateDrag'
 
 interface DemoBedProps {
   entity: GardenEntity
@@ -42,9 +42,16 @@ function quaternionToEuler(q: Quaternion): [number, number, number] {
 
 export default function DemoBed({ entity }: DemoBedProps) {
   const selectEntity = useGarden((s) => s.selectEntity)
-  const isSelected = useGarden((s) => s.selectedEntityId === entity.id)
+  const isSelected = useGarden((s) => s.selectedEntityIds.includes(entity.id))
+  const isMultiSelected = useGarden(
+    (s) => s.selectedEntityIds.length >= 2 && s.selectedEntityIds.includes(entity.id),
+  )
   const isTranslating = useGarden((s) => s.translateModeId === entity.id)
+  const isGroupTranslating = useGarden(
+    (s) => s.groupTranslateActive && s.selectedEntityIds.includes(entity.id),
+  )
   const drag = useTranslateDrag(entity)
+  const groupDrag = useGroupTranslateDrag(entity)
 
   const [w, h, l] = resolveSize(entity)
   const t = 0.05 // plank thickness
@@ -65,13 +72,22 @@ export default function DemoBed({ entity }: DemoBedProps) {
 
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
     if (isTranslating) {
-      // Drag takes over — entity is already selected, no selection re-fire.
+      // Single-entity drag takes over — entity is already selected.
       drag.onPointerDown(e)
       return
     }
+    if (isGroupTranslating) {
+      // Group drag — leader is whichever selected entity received the down.
+      groupDrag.onPointerDown(e)
+      return
+    }
     e.stopPropagation()
-    selectEntity(entity.id)
+    const { multiSelectMode } = useGarden.getState()
+    const additive = e.nativeEvent.shiftKey || multiSelectMode
+    selectEntity(entity.id, additive)
   }
+
+  const outlineColor = isMultiSelected ? '#4ec9ff' : '#ffaa00'
 
   // All plank/soil coords are RELATIVE to the group center (which sits at the
   // bed's mid-height). Rotation on the group then rotates the whole bed
@@ -81,32 +97,36 @@ export default function DemoBed({ entity }: DemoBedProps) {
       position={groupPosition}
       rotation={groupRotation}
       onPointerDown={handlePointerDown}
-      onPointerMove={isTranslating ? drag.onPointerMove : undefined}
-      onPointerUp={isTranslating ? drag.onPointerUp : undefined}
+      onPointerMove={
+        isTranslating ? drag.onPointerMove : isGroupTranslating ? groupDrag.onPointerMove : undefined
+      }
+      onPointerUp={
+        isTranslating ? drag.onPointerUp : isGroupTranslating ? groupDrag.onPointerUp : undefined
+      }
     >
       {/* +X plank */}
       <mesh position={[w / 2 - t / 2, 0, 0]} castShadow receiveShadow>
         <boxGeometry args={[t, h, l]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
-        {isSelected && <Outlines thickness={4} color="#ffaa00" />}
+        {isSelected && <Outlines thickness={4} color={outlineColor} />}
       </mesh>
       {/* -X plank */}
       <mesh position={[-w / 2 + t / 2, 0, 0]} castShadow receiveShadow>
         <boxGeometry args={[t, h, l]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
-        {isSelected && <Outlines thickness={4} color="#ffaa00" />}
+        {isSelected && <Outlines thickness={4} color={outlineColor} />}
       </mesh>
       {/* +Z plank */}
       <mesh position={[0, 0, l / 2 - t / 2]} castShadow receiveShadow>
         <boxGeometry args={[w, h, t]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
-        {isSelected && <Outlines thickness={4} color="#ffaa00" />}
+        {isSelected && <Outlines thickness={4} color={outlineColor} />}
       </mesh>
       {/* -Z plank */}
       <mesh position={[0, 0, -l / 2 + t / 2]} castShadow receiveShadow>
         <boxGeometry args={[w, h, t]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
-        {isSelected && <Outlines thickness={4} color="#ffaa00" />}
+        {isSelected && <Outlines thickness={4} color={outlineColor} />}
       </mesh>
       {/* Soil — slightly inset, top sits 0.02m below frame top */}
       <mesh position={[0, h / 2 - 0.02 - (h - 0.04) / 2, 0]} receiveShadow>

@@ -1,7 +1,18 @@
 /**
  * useTranslateDrag — shared drag-to-move handler set for any entity component
  * (DemoBed, DemoPlant, PrefabPlaceholder, UnknownDebugCube). The hook returns
- * a pair of pointer handlers; attach them to the entity's top-level <group>.
+ * a trio of pointer handlers; attach them to the entity's top-level <group>.
+ *
+ * Two flavors:
+ *   - useTranslateDrag(entity): single-entity translate. Active iff
+ *     `useGarden().translateModeId === entity.id`.
+ *   - useGroupTranslateDrag(entity): group translate. Active iff
+ *     `useGarden().groupTranslateActive` AND the entity is in
+ *     `selectedEntityIds`. The first selected entity to receive a
+ *     pointer-down becomes the "leader" — its snapped ground hit drives the
+ *     uniform delta applied to every selected entity for the duration of the
+ *     drag. On pointer-up we PATCH every moved entity in parallel; if any
+ *     PATCH fails, we revert all of them to the pre-drag snapshot.
  *
  * Behavior:
  *   - When `useGarden().translateModeId === entity.id`, the handlers are live.
@@ -155,6 +166,145 @@ export function useTranslateDrag(entity: GardenEntity): TranslateDragHandlers {
               : 'Move failed'
         setToast(msg)
         console.error('[useTranslateDrag] update failed', err)
+      }
+    })()
+  }
+
+  return { onPointerDown, onPointerMove, onPointerUp }
+}
+
+interface GroupDragState {
+  pointerId: number
+  /** Leader's snapped ground hit at drag start (x, z). The delta applied to
+   *  every selected entity each frame is `currentSnappedHit - this`. */
+  leaderStart: { x: number; z: number }
+  /** Original transforms of every entity in the selection at drag start.
+   *  Used to compute the new position each move and to revert on PATCH error. */
+  originals: Record<string, GardenEntity>
+}
+
+/**
+ * Group translate handler set. Attach the same way you'd attach
+ * useTranslateDrag's handlers — entity components don't care which flavor is
+ * driving the drag; the hooks layer themselves so only the active one fires.
+ */
+export function useGroupTranslateDrag(entity: GardenEntity): TranslateDragHandlers {
+  const dragRef = useRef<GroupDragState | null>(null)
+
+  const isActive = (): boolean => {
+    const { groupTranslateActive, selectedEntityIds } = useGarden.getState()
+    return groupTranslateActive && selectedEntityIds.includes(entity.id)
+  }
+
+  const snapXZ = (x: number, z: number): { x: number; z: number } => {
+    const { snap } = useGarden.getState()
+    if (!snap) return { x, z }
+    return { x: Math.round(x / snap) * snap, z: Math.round(z / snap) * snap }
+  }
+
+  const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
+    if (!isActive()) return
+    e.stopPropagation()
+
+    const hit = new THREE.Vector3()
+    if (!e.ray.intersectPlane(GROUND_PLANE, hit)) return
+
+    try {
+      ;(e.target as unknown as R3FCaptureTarget).setPointerCapture(e.pointerId)
+    } catch {
+      /* no-op */
+    }
+
+    const { entities, selectedEntityIds } = useGarden.getState()
+    const originals: Record<string, GardenEntity> = {}
+    for (const id of selectedEntityIds) {
+      const ent = entities[id]
+      if (ent) originals[id] = ent
+    }
+    dragRef.current = {
+      pointerId: e.pointerId,
+      leaderStart: snapXZ(hit.x, hit.z),
+      originals,
+    }
+  }
+
+  const onPointerMove = (e: ThreeEvent<PointerEvent>) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+    e.stopPropagation()
+
+    const hit = new THREE.Vector3()
+    if (!e.ray.intersectPlane(GROUND_PLANE, hit)) return
+    const cur = snapXZ(hit.x, hit.z)
+    const dx = cur.x - drag.leaderStart.x
+    const dz = cur.z - drag.leaderStart.z
+
+    const { addOrUpdateEntity } = useGarden.getState()
+    for (const id of Object.keys(drag.originals)) {
+      const orig = drag.originals[id]
+      const next: GardenEntity = {
+        ...orig,
+        transform: {
+          ...orig.transform,
+          position: {
+            x: orig.transform.position.x + dx,
+            y: orig.transform.position.y,
+            z: orig.transform.position.z + dz,
+          },
+        },
+      }
+      addOrUpdateEntity(next)
+    }
+  }
+
+  const onPointerUp = (e: ThreeEvent<PointerEvent>) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+    e.stopPropagation()
+    dragRef.current = null
+
+    try {
+      ;(e.target as unknown as R3FCaptureTarget).releasePointerCapture(e.pointerId)
+    } catch {
+      /* no-op */
+    }
+
+    const { entities, currentGardenId, setToast, addOrUpdateEntity } = useGarden.getState()
+    if (!currentGardenId) return
+
+    // Build the diff: only entities whose position actually changed.
+    const movedIds: string[] = []
+    for (const id of Object.keys(drag.originals)) {
+      const orig = drag.originals[id]
+      const cur = entities[id]
+      if (!cur) continue
+      const op = orig.transform.position
+      const np = cur.transform.position
+      if (op.x !== np.x || op.z !== np.z) movedIds.push(id)
+    }
+    if (movedIds.length === 0) return
+
+    void (async () => {
+      try {
+        await Promise.all(
+          movedIds.map((id) => {
+            const cur = entities[id]
+            return updateEntity(currentGardenId, id, { transform: cur.transform })
+          }),
+        )
+      } catch (err) {
+        // Revert every entity in this group to its pre-drag snapshot.
+        for (const id of Object.keys(drag.originals)) {
+          addOrUpdateEntity(drag.originals[id])
+        }
+        const msg =
+          err instanceof ApiError
+            ? `Group move failed (${err.status})`
+            : err instanceof Error
+              ? err.message
+              : 'Group move failed'
+        setToast(msg)
+        console.error('[useGroupTranslateDrag] PATCH failed', err)
       }
     })()
   }

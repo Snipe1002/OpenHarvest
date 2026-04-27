@@ -89,12 +89,13 @@ export default function DemoGround() {
   const handleClick = async (e: ThreeEvent<MouseEvent>) => {
     const state = useGarden.getState()
     const {
-      selectedEntityId,
+      selectedEntityIds,
       selectedWallId,
       placement,
       housePlacement,
       currentGardenId,
       snap,
+      multiSelectMode,
     } = state
 
     // ---- House placement: wall corner clicks override everything else ----
@@ -149,7 +150,7 @@ export default function DemoGround() {
         // Optimistic local insert; SignalR `entityUpserted` will arrive too,
         // but `addOrUpdateEntity` is idempotent so duplicates are harmless.
         useGarden.getState().addOrUpdateEntity(created)
-        useGarden.getState().selectEntity(created.id)
+        useGarden.getState().selectEntity(created.id, false)
       } catch (err) {
         const msg =
           err instanceof ApiError
@@ -170,11 +171,16 @@ export default function DemoGround() {
     }
 
     // No placement — empty ground click clears selection (entity OR wall).
-    if (selectedEntityId) {
-      useGarden.getState().selectEntity(null)
-    }
-    if (selectedWallId) {
-      useGarden.getState().selectWall(null)
+    // Holding shift or being in multi-select mode preserves the selection so
+    // users don't accidentally lose a multi-pick when missing on the ground.
+    const preserveSelection = e.nativeEvent.shiftKey || multiSelectMode
+    if (!preserveSelection) {
+      if (selectedEntityIds.length > 0) {
+        useGarden.getState().clearSelection()
+      }
+      if (selectedWallId) {
+        useGarden.getState().selectWall(null)
+      }
     }
   }
 

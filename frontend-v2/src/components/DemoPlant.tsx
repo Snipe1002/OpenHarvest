@@ -19,7 +19,7 @@ import { Outlines } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import type { GardenEntity, Quaternion } from '../api/types'
 import { useGarden } from '../store/garden'
-import { useTranslateDrag } from './useTranslateDrag'
+import { useGroupTranslateDrag, useTranslateDrag } from './useTranslateDrag'
 
 function quaternionToEuler(q: Quaternion): [number, number, number] {
   const tq = new THREE.Quaternion(q.x, q.y, q.z, q.w)
@@ -51,9 +51,16 @@ function resolveHeight(entity: GardenEntity): number {
 
 export default function DemoPlant({ entity }: DemoPlantProps) {
   const selectEntity = useGarden((s) => s.selectEntity)
-  const isSelected = useGarden((s) => s.selectedEntityId === entity.id)
+  const isSelected = useGarden((s) => s.selectedEntityIds.includes(entity.id))
+  const isMultiSelected = useGarden(
+    (s) => s.selectedEntityIds.length >= 2 && s.selectedEntityIds.includes(entity.id),
+  )
   const isTranslating = useGarden((s) => s.translateModeId === entity.id)
+  const isGroupTranslating = useGarden(
+    (s) => s.groupTranslateActive && s.selectedEntityIds.includes(entity.id),
+  )
   const drag = useTranslateDrag(entity)
+  const groupDrag = useGroupTranslateDrag(entity)
 
   const { x: px, y: py, z: pz } = entity.transform.position
   const stemHeight = resolveHeight(entity)
@@ -76,23 +83,35 @@ export default function DemoPlant({ entity }: DemoPlantProps) {
       drag.onPointerDown(e)
       return
     }
+    if (isGroupTranslating) {
+      groupDrag.onPointerDown(e)
+      return
+    }
     e.stopPropagation()
-    selectEntity(entity.id)
+    const { multiSelectMode } = useGarden.getState()
+    const additive = e.nativeEvent.shiftKey || multiSelectMode
+    selectEntity(entity.id, additive)
   }
+
+  const outlineColor = isMultiSelected ? '#4ec9ff' : '#ffaa00'
 
   return (
     <group
       position={[px, py, pz]}
       rotation={groupRotation}
       onPointerDown={handlePointerDown}
-      onPointerMove={isTranslating ? drag.onPointerMove : undefined}
-      onPointerUp={isTranslating ? drag.onPointerUp : undefined}
+      onPointerMove={
+        isTranslating ? drag.onPointerMove : isGroupTranslating ? groupDrag.onPointerMove : undefined
+      }
+      onPointerUp={
+        isTranslating ? drag.onPointerUp : isGroupTranslating ? groupDrag.onPointerUp : undefined
+      }
     >
       {/* Stem */}
       <mesh position={[0, stemHeight / 2, 0]} castShadow>
         <cylinderGeometry args={[stemRadius, stemRadius, stemHeight, 8]} />
         <meshStandardMaterial color="#4a8a3a" roughness={0.8} metalness={0} />
-        {isSelected && <Outlines thickness={4} color="#ffaa00" />}
+        {isSelected && <Outlines thickness={4} color={outlineColor} />}
       </mesh>
       {/* Leaf 1 */}
       <mesh position={[leafSize / 2, stemHeight * 0.85, 0]} rotation={[0, 0, Math.PI / 6]} castShadow>
