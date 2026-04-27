@@ -184,6 +184,25 @@
     }
   };
 
+  // ---------- Phase 5.7 — fancy renderer toggle ----------
+  // localStorage["openharvest.fancyMode"] gates PBR materials, the HDRI environment cubemap,
+  // and shadow-mapping. Default: ON for desktop, OFF for mobile (1024×1024 shadow maps + IBL
+  // are borderline on phone GPUs and the env cubemap costs ~340 KB, which we don't want to
+  // burn on a tap-and-go phone session). The toggle in Settings lets the user override —
+  // switching values requires a page reload because env textures + shadow generators are
+  // wired into the scene graph at construction time.
+  //
+  // We expose the resolved value as `window.OpenHarvestFancy` BEFORE prefabs.js's material
+  // palette is built (palette construction is lazy on first prefab build, so the global only
+  // needs to exist before `meshForEntity` runs — which is well after this point in the file).
+  const FANCY_KEY = "openharvest.fancyMode";
+  const isMobile = window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
+  const fancyStored = localStorage.getItem(FANCY_KEY);
+  const fancyMode = fancyStored === null
+    ? !isMobile               // first-run default: fancy ON for desktop, OFF for mobile
+    : fancyStored === "1";
+  window.OpenHarvestFancy = fancyMode;
+
   // ---------- Babylon scene ----------
   const canvas = document.getElementById("renderCanvas");
   const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
@@ -234,6 +253,50 @@
   groundMat.lineColor = new BABYLON.Color3(0.20, 0.30, 0.20);
   ground.material = groundMat;
   ground.metadata = { isGround: true };
+
+  // ---------- Phase 5.7 — environment HDRI + shadows ----------
+  // In fancy mode we mount an image-based-lighting cubemap (lib/env.env) so PBR materials
+  // pick up sky reflections + a default skybox, AND wire the existing directional sun light
+  // to a ShadowGenerator. Both are cheap-but-not-free, so the whole block is gated on
+  // `fancyMode`. Toggling at runtime requires a page reload (we'd otherwise have to dispose +
+  // re-create every PBR material, which isn't worth the surface area).
+  //
+  // Shadow map size: 512 on mobile, 1024 on desktop. Babylon's blur exponential SM is the
+  // softest-looking option that's still cheap enough for an iPhone GPU. addShadowCaster is
+  // called from meshForEntity for every entity mesh as it's built.
+  let shadowGen = null;
+  if (fancyMode) {
+    try {
+      // Default skybox + env reflections via EnvironmentHelper. We disable createGround
+      // because we already have our own grid ground above; the helper's skybox alone gives
+      // us a tasteful gradient backdrop even before the .env file loads.
+      scene.createDefaultEnvironment({
+        createGround: false,
+        createSkybox: true,
+        enableGroundShadow: false,
+        groundYBias: 0,
+      });
+      // Replace the helper's procedural cubemap with our vendored prefiltered HDRI for proper
+      // image-based lighting on PBR materials. CreateFromPrefilteredData is the right loader
+      // for Babylon's `.env` format (the helper would otherwise leave PBR materials reading
+      // the synthetic cubemap, which has no high-frequency detail).
+      scene.environmentTexture = BABYLON.CubeTexture.CreateFromPrefilteredData("lib/env.env?v=607", scene);
+      scene.environmentIntensity = 0.85;       // tasteful — full 1.0 over-brightens daytime scenes
+
+      // Shadows: the Phase 5.1 sun is a DirectionalLight, which is exactly what
+      // ShadowGenerator wants. addShadowCaster() is called per-mesh from meshForEntity below
+      // (and we mark the ground as a shadow receiver here).
+      const shadowMapSize = isMobile ? 512 : 1024;
+      shadowGen = new BABYLON.ShadowGenerator(shadowMapSize, sun);
+      shadowGen.useBlurExponentialShadowMap = true;
+      shadowGen.blurKernel = 32;
+      shadowGen.darkness = 0.35;
+      ground.receiveShadows = true;
+    } catch (e) {
+      console.warn("fancy renderer setup failed — falling back to simple shading", e);
+      shadowGen = null;
+    }
+  }
 
   // Phase 5.2.2 (B6) — snap grid overlay. A second, transparent ground plane sits a hair above
   // the main ground, with a GridMaterial whose gridRatio matches the active snap interval.
@@ -434,12 +497,25 @@
     mesh.isPickable = true;
 
     if (assignDefaultMaterial) {
-      const mat = new BABYLON.StandardMaterial(`mat_${entity.id}`, scene);
-      mat.diffuseColor =
+      // Phase 5.7 — match the prefab palette's shading model. In fancy mode mint a PBR
+      // material with sensible roughness for the entity kind (plant leaves are matte, bed
+      // wood is mid-rough, generic boxes are neutral); otherwise fall back to the
+      // pre-Phase-5.7 StandardMaterial so the basic-mode renderer keeps working.
+      const baseColor =
         entity.kind === "Plant" ? new BABYLON.Color3(0.20, 0.65, 0.15) :
         entity.kind === "Bed"   ? new BABYLON.Color3(0.45, 0.30, 0.18) :
                                   new BABYLON.Color3(0.6, 0.6, 0.6);
-      mesh.material = mat;
+      if (window.OpenHarvestFancy) {
+        const mat = new BABYLON.PBRMaterial(`mat_${entity.id}`, scene);
+        mat.albedoColor = baseColor;
+        mat.metallic = 0;
+        mat.roughness = entity.kind === "Plant" ? 0.95 : 0.85;
+        mesh.material = mat;
+      } else {
+        const mat = new BABYLON.StandardMaterial(`mat_${entity.id}`, scene);
+        mat.diffuseColor = baseColor;
+        mesh.material = mat;
+      }
     }
 
     // Phase 5.2.2 (B5) — per-instance color tint. The user-chosen color (stored in
@@ -459,6 +535,23 @@
       label = makeLabel(entity.id, entity.name, mesh, geom);
     }
     meshRegistry.set(entity.id, { entity, mesh, label });
+
+    // Phase 5.7 — shadow casting. Register the mesh AND its descendants (prefab merged
+    // builds usually return a single mesh, but composite builders can leave child meshes
+    // behind). Walls/floors/beds/plants all cast onto the ground; the ground was set up as
+    // the receiver in the scene-init block. Cheap call — Babylon dedupes duplicate adds.
+    if (shadowGen) {
+      try {
+        shadowGen.addShadowCaster(mesh);
+        mesh.receiveShadows = true;
+        if (mesh.getChildMeshes) {
+          for (const child of mesh.getChildMeshes(false)) {
+            shadowGen.addShadowCaster(child);
+            child.receiveShadows = true;
+          }
+        }
+      } catch (e) { /* non-fatal — shadow gen may have been disposed */ }
+    }
 
     // Phase 6.0 — if this is a wall mesh and cut-away is currently active, fade it on the
     // way in so locally-placed walls (or initial-load walls) don't pop opaque for a frame
@@ -509,6 +602,17 @@
   // defaults. For MultiMaterial meshes (prefab merge with multiple materials) we tint only the
   // FIRST sub-material; soil / glass / metal accents stay their natural color so the user's
   // tint reads as "wood color" or "pot color" rather than monotone repaint.
+  //
+  // Phase 5.7 — PBR materials store the diffuse hue on `albedoColor`, not `diffuseColor`.
+  // We branch on whichever field exists so the same helper works for both shading models.
+  function tintMaterialColor(mat, c) {
+    if (!mat) return;
+    if (mat.albedoColor !== undefined && mat.albedoColor !== null) {
+      mat.albedoColor = c;
+    } else if (mat.diffuseColor !== undefined && mat.diffuseColor !== null) {
+      mat.diffuseColor = c;
+    }
+  }
   function applyEntityColor(mesh, hex, eid) {
     const c = parseHexColor(hex);
     if (!c || !mesh) return;
@@ -523,14 +627,14 @@
         const sm = cloned.subMaterials[i];
         if (!sm) continue;
         const smc = sm.clone(`${sm.name}_${eid}`);
-        if (smc.diffuseColor) smc.diffuseColor = c;
+        tintMaterialColor(smc, c);
         cloned.subMaterials[i] = smc;
         break; // only tint the dominant slot
       }
       mesh.material = cloned;
     } else {
       const cloned = mat.clone(`mat_${eid}_tinted`);
-      if (cloned.diffuseColor) cloned.diffuseColor = c;
+      tintMaterialColor(cloned, c);
       mesh.material = cloned;
     }
   }
@@ -2651,11 +2755,24 @@
   // readable than a uniform fade of every surface in the segment.
   function applyCutawayToMaterial(mat, alpha) {
     if (!mat) return;
+    // Phase 5.7 — PBRMaterials need `transparencyMode` flipped to ALPHABLEND when alpha
+    // drops below 1, otherwise the GPU keeps depth-writing the wall as if it were opaque
+    // and the cut-away looks dimmed but not see-through. Restore OPAQUE on the way back so
+    // walls re-bind the fast opaque path when cut-away is toggled off.
+    const setOne = (m) => {
+      if (!m) return;
+      m.alpha = alpha;
+      if (m instanceof BABYLON.PBRMaterial) {
+        m.transparencyMode = (alpha < 1)
+          ? BABYLON.PBRMaterial.PBRMATERIAL_ALPHABLEND
+          : BABYLON.PBRMaterial.PBRMATERIAL_OPAQUE;
+      }
+    };
     if (mat instanceof BABYLON.MultiMaterial) {
       const subs = mat.subMaterials || [];
-      if (subs.length > 0 && subs[0]) subs[0].alpha = alpha;
+      if (subs.length > 0 && subs[0]) setOne(subs[0]);
     } else {
-      mat.alpha = alpha;
+      setOne(mat);
     }
   }
 
@@ -3474,6 +3591,20 @@
           Set your location for an accurate sun position. Defaults to ${DEFAULT_LAT.toFixed(1)} / ${DEFAULT_LNG.toFixed(1)}.
         </div>
       </div>
+      <!-- Phase 5.7: fancy renderer toggle. PBR materials + HDRI sky reflections + cast
+           shadows. Defaults ON for desktop, OFF for mobile (smaller GPUs struggle with the
+           1024×1024 shadow map + the env cubemap). Switching values requires a page reload
+           because the env texture and shadow generator are wired in at scene-construction. -->
+      <div class="settings-section">
+        <label>Renderer</label>
+        <label style="display:flex; align-items:center; gap:10px; font-size:14px; color:var(--text); text-transform:none; letter-spacing:0;">
+          <input type="checkbox" data-field="fancy" style="width:18px; height:18px; accent-color: var(--accent); cursor: pointer;" />
+          Fancy mode (PBR + sky reflections + shadows)
+        </label>
+        <div style="font-size:11px; color: var(--text-dim);">
+          Reload required after changing this. Default: ON for desktop, OFF for mobile.
+        </div>
+      </div>
       <!-- Phase 5.6: portable scene export. GLB is the standard glTF binary format Blender,
            Three.js, Unity, and most viewers open natively. The Babylon-native .babylon JSON
            dump is offered alongside as a lighter format for Babylon-only round-tripping. -->
@@ -3500,6 +3631,19 @@
     nameInput.value = gardenName || "";
     latInput.value = gardenLocationSet ? String(gardenLat) : "";
     lngInput.value = gardenLocationSet ? String(gardenLng) : "";
+
+    // Phase 5.7 — initialise the fancy-mode checkbox to the resolved value (which already
+    // accounts for first-run mobile/desktop default). The checkbox writes localStorage on
+    // change; a reload is needed for the change to take effect because env textures and
+    // shadow generators are baked into the scene at construction time.
+    const fancyCheckbox = modal.querySelector('[data-field="fancy"]');
+    if (fancyCheckbox) {
+      fancyCheckbox.checked = !!window.OpenHarvestFancy;
+      fancyCheckbox.addEventListener("change", () => {
+        localStorage.setItem(FANCY_KEY, fancyCheckbox.checked ? "1" : "0");
+        setStatus("fancy mode " + (fancyCheckbox.checked ? "ON" : "off") + " — reload to apply");
+      });
+    }
 
     locateBtn.addEventListener("click", () => {
       if (!navigator.geolocation) { setStatus("geolocation unavailable"); return; }
