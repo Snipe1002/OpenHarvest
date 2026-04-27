@@ -190,18 +190,24 @@ function NumberField({ label, value, onCommit, step = 0.1, min }: NumberFieldPro
 }
 
 export default function InspectorCard() {
-  // We intentionally subscribe to the id only and look the entity up from the
-  // entities dict in a separate selector. This way a re-render caused by an
-  // entity-content change doesn't churn the `entity` reference identity for
-  // useEffect deps that key off `entity.id`.
-  const selectedId = useGarden((s) => s.selectedEntityId)
+  // The single-entity inspector only mounts when EXACTLY one entity is
+  // selected. When zero or multiple are selected, it returns null and the
+  // MultiSelectInspector takes over (for >=2). We intentionally subscribe to
+  // the id only and look the entity up from the entities dict in a separate
+  // selector — this way a re-render caused by an entity-content change
+  // doesn't churn the `entity` reference identity for useEffect deps that
+  // key off `entity.id`.
+  const selectedId = useGarden((s) =>
+    s.selectedEntityIds.length === 1 ? s.selectedEntityIds[0] : null,
+  )
   const entity = useGarden((s) => (selectedId ? s.entities[selectedId] ?? null : null))
   const gardenId = useGarden((s) => s.currentGardenId)
   const setToast = useGarden((s) => s.setToast)
-  const selectEntity = useGarden((s) => s.selectEntity)
+  const clearSelection = useGarden((s) => s.clearSelection)
   const addOrUpdateEntity = useGarden((s) => s.addOrUpdateEntity)
   const removeEntity = useGarden((s) => s.removeEntity)
   const setTranslateMode = useGarden((s) => s.setTranslateMode)
+  const selectEntity = useGarden((s) => s.selectEntity)
 
   const [expanded, setExpanded] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -315,7 +321,7 @@ export default function InspectorCard() {
     }
     const id = entity.id
     removeEntity(id)
-    selectEntity(null)
+    clearSelection()
     try {
       await deleteEntity(gardenId, id)
     } catch (err) {
@@ -421,7 +427,7 @@ export default function InspectorCard() {
           </button>
           <button
             style={ICON_BUTTON}
-            onClick={() => selectEntity(null)}
+            onClick={() => clearSelection()}
             title="Close"
           >
             ✕

@@ -10,6 +10,8 @@ import HouseToolbar, {
   createWindowOnWall,
 } from './components/HouseToolbar'
 import InspectorCard from './components/InspectorCard'
+import MultiChip from './components/MultiChip'
+import MultiSelectInspector from './components/MultiSelectInspector'
 import SampleBuilding from './components/SampleBuilding'
 import SnapChip from './components/SnapChip'
 import StickyChip from './components/StickyChip'
@@ -148,8 +150,10 @@ export default function App() {
       {/* HTML overlays — siblings of the Viewer canvas. */}
       <SnapChip />
       <StickyChip />
+      <MultiChip />
       <HouseToolbar />
       <AddToolbar />
+      <MultiSelectInspector />
       <TranslateStatusPill />
       <ToastBar />
     </div>
