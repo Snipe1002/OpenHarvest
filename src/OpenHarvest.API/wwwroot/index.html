@@ -224,12 +224,17 @@
       opacity: 0;
     }
     #radial.open .item { opacity: 1; }
-    #radial.open .item:nth-child(1) { transform: translate(0, -70px); }    /* up = photo */
-    #radial.open .item:nth-child(2) { transform: translate(70px, 0); }     /* right = rename */
-    #radial.open .item:nth-child(3) { transform: translate(0, 70px); }     /* down = move */
-    #radial.open .item:nth-child(4) { transform: translate(-70px, 0); }    /* left = delete */
+    /* 5-point pentagon arrangement: photo (top), rename (upper right), move (lower right),
+       resize (lower left), delete (upper left). Uses 72° spacing on a 78px radius so the
+       icons don't crowd. */
+    #radial.open .item:nth-child(1) { transform: translate(0, -78px); }              /* 90°  = photo */
+    #radial.open .item:nth-child(2) { transform: translate(74px, -24px); }           /* 18°  = rename */
+    #radial.open .item:nth-child(3) { transform: translate(46px, 63px); }            /* -54° = move */
+    #radial.open .item:nth-child(4) { transform: translate(-46px, 63px); }           /* -126°= resize */
+    #radial.open .item:nth-child(5) { transform: translate(-74px, -24px); }          /* 162° = delete */
     #radial .item:active { background: var(--panel-hover); }
     #radial .item.danger { color: var(--danger); }
+    #radial .item.disabled { opacity: 0.35 !important; cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -248,6 +253,7 @@
     <div class="item" data-action="photo">Photo</div>
     <div class="item" data-action="rename">Rename</div>
     <div class="item" data-action="move">Move</div>
+    <div class="item" data-action="resize">Resize</div>
     <div class="item danger" data-action="delete">Delete</div>
   </div>
   <input id="photoInput" type="file" accept="image/*" capture="environment" style="display:none" />
