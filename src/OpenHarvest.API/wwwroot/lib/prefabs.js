@@ -416,6 +416,28 @@
     return merged;
   }
 
+  // Phase 6.1 — wall-mounted shelf. A simple wood plank: width along X is the shelf length,
+  // Y is plank thickness, Z is the depth (how far the shelf protrudes from the wall). The
+  // builder anchors the plank at the bottom face (so position.y is the shelf's underside),
+  // matching the rest of the prefab library's ground-anchored convention. The wall-snap logic
+  // in app.js translates "stick this to a wall at 4 ft" into a final transform that flushes
+  // the shelf's back face against the wall surface and rotates so its long axis is parallel.
+  // metadata.isShelf is consumed by findShelfAt() so plants can land on top of the plank.
+  function buildShelfWall(B, scene, name, size) {
+    const p = pal(scene);
+    const shelf = B.MeshBuilder.CreateBox(name, {
+      width: size.x, height: size.y, depth: size.z,
+    }, scene);
+    const mat = new BABYLON.StandardMaterial(name + "_mat", scene);
+    mat.diffuseColor = new BABYLON.Color3(0.55, 0.42, 0.28); // wood
+    mat.specularColor = new BABYLON.Color3(0.05, 0.05, 0.05);
+    shelf.material = mat;
+    shelf.position.y = size.y / 2;
+    shelf.metadata = shelf.metadata || {};
+    shelf.metadata.isShelf = true;
+    return shelf;
+  }
+
   // Wall + translucent window panel composite. Mid-height window matching standard residential
   // proportions. Like buildDoor, this hands off to mergeAndName which produces a multimaterial
   // when source materials differ — `houseGlass` already has alpha=0.5, so the window stays
@@ -574,6 +596,20 @@
       maxSize:     def(10, 10, 1.5),
       build: (B, scene, name, size) => buildWindow(B, scene, name,
         resolveSize(size, def(4, 8, 0.5), def(2, 4, 0.25), def(10, 10, 1.5))),
+    },
+    // Phase 6.1 — wall-mounted shelf. Default size is a 3 ft long, 1 ft deep wood plank,
+    // 0.1 ft (~1.2 in) thick. v1 places it at 4 ft up the nearest wall (see findNearestWall in
+    // app.js); the user can drag it up/down via the Position modal afterwards. Plants placed
+    // near a shelf's top surface auto-parent onto it (see findShelfAt).
+    "shelf-wall": {
+      name: "Wall Shelf",
+      category: "House",
+      icon: "🪑",
+      defaultSize: def(3, 0.1, 1),
+      minSize:     def(1, 0.05, 0.5),
+      maxSize:     def(8, 0.5, 2),
+      build: (B, scene, name, size) => buildShelfWall(B, scene, name,
+        resolveSize(size, def(3, 0.1, 1), def(1, 0.05, 0.5), def(8, 0.5, 2))),
     },
   };
 

@@ -92,6 +92,10 @@ public class GardensController : ControllerBase
             ["wall-segment"]     = new[] { "wall" },
             ["door"]             = new[] { "wall", "door" },
             ["window"]           = new[] { "wall", "window" },
+            // Phase 6.1 — wall-mounted shelf. Tagged "wall-mounted" + "shelf" so the advisor
+            // can reason about indoor vertical container placement (e.g., "your basil is on a
+            // wall shelf — make sure the wall gets ≥4 hours of direct sun through the window").
+            ["shelf-wall"]       = new[] { "wall-mounted", "shelf" },
         };
 
     [HttpPost("{id:guid}/entities")]
