@@ -49,6 +49,7 @@ export default function App() {
   const loadPrefabCatalog = useGarden((s) => s.loadPrefabCatalog)
   const entities = useGarden((s) => s.entities)
   const translateModeId = useGarden((s) => s.translateModeId)
+  const groupTranslateActive = useGarden((s) => s.groupTranslateActive)
   // Camera orbit pauses while the user is mid-region-drag so the view doesn't
   // pan with the second-corner pointer move. Other region phases (awaiting
   // first corner, configuring) leave camera orbit alone — the rectangle is
@@ -195,9 +196,11 @@ export default function App() {
       <SampleBuilding />
       <Viewer selectionManager="custom">
         {/* Camera orbit is suspended while the user is dragging an entity in
-            translate mode OR mid-region-paint-drag so the view doesn't pan
-            along with the pointer. */}
-        <CameraControls enabled={!translateModeId && !regionDragActive} />
+            single OR group translate mode, or mid-region-paint-drag, so the
+            view doesn't pan along with the pointer. */}
+        <CameraControls
+          enabled={!translateModeId && !groupTranslateActive && !regionDragActive}
+        />
         <DemoGround />
         {renderChildren(null, new Set())}
         {orphanRoots.map((e) => (

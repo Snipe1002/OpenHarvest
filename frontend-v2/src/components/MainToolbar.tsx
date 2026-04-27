@@ -329,7 +329,7 @@ export default function MainToolbar() {
         </div>
       )}
 
-      <div style={BAR_STYLE}>
+      <div style={BAR_STYLE} data-toolbar="main">
         {isGardenPicking && (
           <div style={PICKER_STYLE}>
             {!prefabCatalog && (
