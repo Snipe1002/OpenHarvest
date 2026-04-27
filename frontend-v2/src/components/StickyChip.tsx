@@ -1,17 +1,20 @@
 /**
- * StickyChip — small fixed-position toggle in the top-left, sits next to
- * SnapChip. When ON, finishing a placement (entity, wall, door, window)
- * does NOT exit placement mode — the toolbar stays armed for another.
- * Esc still cancels regardless of sticky state.
+ * StickyChip — small fixed-position toggle in the top-left chip column.
+ * Sits below SnapChip. When ON, finishing a placement (entity, wall, door,
+ * window) does NOT exit placement mode — the toolbar stays armed for
+ * another. Esc still cancels regardless of sticky state.
  *
  * Persists to localStorage via the store. Default off.
+ *
+ * Position: second slot in the top-left chip column (SnapChip top, then
+ * StickyChip, then MultiChip, then UnitsChip).
  */
 import { useGarden } from '../store/garden'
 
 const STYLE: React.CSSProperties = {
   position: 'fixed',
-  top: 16,
-  left: 124, // sit to the right of SnapChip (~100px wide + 8 gap)
+  top: 48, // SnapChip is at top:16 with ~28px height + 4 gap.
+  left: 16,
   zIndex: 11,
   padding: '6px 10px',
   background: 'rgba(20, 22, 24, 0.92)',

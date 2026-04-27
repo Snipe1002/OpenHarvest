@@ -2,14 +2,11 @@ import { useEffect } from 'react'
 import { Viewer } from '@pascal-app/viewer'
 import { CameraControls } from '@react-three/drei'
 import { emitter, type WallEvent } from '@pascal-app/core'
-import AddToolbar from './components/AddToolbar'
 import DemoGround from './components/DemoGround'
 import EntityRenderer from './components/EntityRenderer'
-import HouseToolbar, {
-  createDoorOnWall,
-  createWindowOnWall,
-} from './components/HouseToolbar'
+import { createDoorOnWall, createWindowOnWall } from './components/houseHelpers'
 import InspectorCard from './components/InspectorCard'
+import MainToolbar from './components/MainToolbar'
 import MultiChip from './components/MultiChip'
 import MultiSelectInspector from './components/MultiSelectInspector'
 import SampleBuilding from './components/SampleBuilding'
@@ -17,6 +14,7 @@ import SnapChip from './components/SnapChip'
 import StickyChip from './components/StickyChip'
 import ToastBar from './components/ToastBar'
 import TranslateStatusPill from './components/TranslateStatusPill'
+import UnitsChip from './components/UnitsChip'
 import WallInspectorCard from './components/WallInspectorCard'
 import { listGardenIds } from './api/client'
 import { connect, disconnect } from './api/signalr'
@@ -147,12 +145,16 @@ export default function App() {
         <InspectorCard />
         <WallInspectorCard />
       </Viewer>
-      {/* HTML overlays — siblings of the Viewer canvas. */}
+      {/* HTML overlays — siblings of the Viewer canvas. The four chips
+          (Snap, Sticky, Multi, Units) stack vertically in a top-left
+          column so they don't fight for horizontal space with the
+          bottom-center MainToolbar or the center status pills (which now
+          sit at top:152, well below the chip column). */}
       <SnapChip />
       <StickyChip />
       <MultiChip />
-      <HouseToolbar />
-      <AddToolbar />
+      <UnitsChip />
+      <MainToolbar />
       <MultiSelectInspector />
       <TranslateStatusPill />
       <ToastBar />

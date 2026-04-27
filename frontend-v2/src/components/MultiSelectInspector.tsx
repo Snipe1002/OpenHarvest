@@ -4,11 +4,11 @@
  * visual language but exposes mass operations across the whole selection
  * instead of single-entity edits.
  *
- * Position rationale: bottom-center, sitting just above AddToolbar (which is
- * at bottom:16). HouseToolbar lives top-center; the single InspectorCard
- * floats anchored to its entity in 3D. Bottom-center gives this inspector
- * its own real estate that doesn't fight with any of those, and the user
- * tends to look there for edit-mode controls already.
+ * Position rationale: bottom-center, sitting just above MainToolbar (which
+ * is at bottom:16). The single InspectorCard floats anchored to its entity
+ * in 3D. Bottom-center gives this inspector its own real estate that
+ * doesn't fight with the toolbar, and the user tends to look there for
+ * edit-mode controls already.
  *
  * Operations:
  *   - 🗑 Delete all   — two-step confirm; DELETE every selected entity in
@@ -44,6 +44,7 @@ import * as THREE from 'three'
 import { ApiError, createEntity, deleteEntity, updateEntity } from '../api/client'
 import type { CreateEntityRequest, GardenEntity, Quaternion } from '../api/types'
 import { useGarden } from '../store/garden'
+import { formatLength } from '../store/unitsHelpers'
 
 const PILL_STYLE: React.CSSProperties = {
   display: 'flex',
@@ -64,7 +65,7 @@ const PILL_STYLE: React.CSSProperties = {
 
 const WRAP_STYLE: React.CSSProperties = {
   position: 'fixed',
-  // AddToolbar sits at bottom:16 with ~60px of height. Park us above that.
+  // MainToolbar sits at bottom:16 with ~60px of height. Park us above that.
   bottom: 90,
   left: '50%',
   transform: 'translateX(-50%)',
@@ -130,9 +131,15 @@ const HEADER_STYLE: React.CSSProperties = {
   pointerEvents: 'auto',
 }
 
-function fmt(n: number): string {
-  if (!Number.isFinite(n)) return '0'
-  return (Math.round(n * 100) / 100).toString()
+/**
+ * Format a length in meters in the active unit system. Used for the
+ * centroid readout in the header. We keep this thin wrapper so the unit
+ * selector flows in via the hook without threading the value through
+ * every helper signature.
+ */
+function fmt(n: number, units: 'metric' | 'imperial'): string {
+  if (!Number.isFinite(n)) return units === 'metric' ? '0 m' : "0'0\""
+  return formatLength(n, units)
 }
 
 function describeKindBreakdown(entities: GardenEntity[]): string {
@@ -194,6 +201,7 @@ export default function MultiSelectInspector() {
   const clearSelection = useGarden((s) => s.clearSelection)
   const groupTranslateActive = useGarden((s) => s.groupTranslateActive)
   const setGroupTranslateActive = useGarden((s) => s.setGroupTranslateActive)
+  const units = useGarden((s) => s.units)
 
   const selected: GardenEntity[] = useMemo(() => {
     const out: GardenEntity[] = []
@@ -432,7 +440,7 @@ export default function MultiSelectInspector() {
         <span style={{ color: '#4ec9ff', fontWeight: 600 }}>{selected.length} selected</span>
         <span style={{ color: '#aaa' }}>— {breakdown}</span>
         <span style={{ color: '#888' }}>
-          centroid ({fmt(centroid.x)}, {fmt(centroid.y)}, {fmt(centroid.z)})
+          centroid ({fmt(centroid.x, units)}, {fmt(centroid.y, units)}, {fmt(centroid.z, units)})
         </span>
       </div>
 

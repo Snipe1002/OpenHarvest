@@ -1,0 +1,303 @@
+/**
+ * MainToolbar — single bottom-center HTML toolbar that combines both the
+ * Garden placement buttons (+ Bed / + Plant / + Prefab) and the House
+ * construction buttons (+ Wall / + Door / + Window). The two sections are
+ * separated by a small uppercase label and a vertical divider:
+ *
+ *   [Garden]  + Bed   + Plant  + Prefab    │    [House]  + Wall  + Door  + Window
+ *
+ * Behaviors preserved from the previous AddToolbar / HouseToolbar split:
+ *   - Esc cancels whichever placement is active (garden or house).
+ *   - Active button gets a highlighted style; the other buttons in BOTH
+ *     sections are disabled while a placement is armed, so the user can't
+ *     enter "double" placement mode across the two pipelines.
+ *   - Sticky behavior is store-driven and unchanged.
+ *   - The "+ Prefab" button reveals an inline picker with slugs; choosing
+ *     one arms placement with that slug.
+ *   - Status pills (orange) sit at top:152 — guaranteed below the top-left
+ *     chip column (Snap/Sticky/Multi/Units) at any viewport width.
+ *
+ * Wall-corner placement (first vs second click) is driven by the ground
+ * click handler in `DemoGround.tsx` reading `housePlacement.pendingFirstCorner`.
+ * Door / window placement is driven by the `wall:click` subscriber in
+ * `App.tsx`. Construction helpers live in `houseHelpers.ts`.
+ *
+ * Narrow viewports: the row uses `flex-wrap` so on phones (≈375px) the
+ * House section can wrap to a second line below the Garden section without
+ * overflowing. Both sections retain their internal layout in either case.
+ */
+import { useEffect } from 'react'
+import {
+  useGarden,
+  type HousePlacementType,
+  type PlacementType,
+} from '../store/garden'
+
+const PREFAB_SLUGS: string[] = ['terracotta-pot', 'tomato-cage']
+
+const BAR_STYLE: React.CSSProperties = {
+  position: 'fixed',
+  bottom: 16,
+  left: '50%',
+  transform: 'translateX(-50%)',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 6,
+  fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+  zIndex: 10,
+}
+
+const BUTTON_ROW_STYLE: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  justifyContent: 'center',
+  alignItems: 'center',
+  gap: 6,
+  background: 'rgba(20, 22, 24, 0.92)',
+  padding: 6,
+  borderRadius: 6,
+  border: '1px solid #333',
+  boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+  maxWidth: 'calc(100vw - 32px)',
+}
+
+const SECTION_STYLE: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+}
+
+const SECTION_LABEL_STYLE: React.CSSProperties = {
+  color: '#888',
+  fontSize: 10,
+  fontWeight: 600,
+  letterSpacing: 0.5,
+  textTransform: 'uppercase',
+  paddingRight: 2,
+  userSelect: 'none',
+}
+
+const DIVIDER_STYLE: React.CSSProperties = {
+  width: 1,
+  height: 20,
+  background: '#444',
+  margin: '0 10px',
+  flex: '0 0 auto',
+}
+
+const BUTTON_STYLE: React.CSSProperties = {
+  background: '#2a2d31',
+  color: '#e5e5e5',
+  border: '1px solid #444',
+  borderRadius: 3,
+  padding: '6px 12px',
+  fontSize: 13,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+}
+
+const PILL_STYLE: React.CSSProperties = {
+  position: 'fixed',
+  top: 152,
+  left: '50%',
+  transform: 'translateX(-50%)',
+  background: 'rgba(255, 170, 0, 0.92)',
+  color: '#1a1a1a',
+  fontFamily: 'system-ui, sans-serif',
+  fontSize: 13,
+  fontWeight: 500,
+  padding: '6px 12px',
+  borderRadius: 999,
+  border: '1px solid #d99a00',
+  zIndex: 10,
+  cursor: 'pointer',
+}
+
+const PICKER_STYLE: React.CSSProperties = {
+  display: 'flex',
+  gap: 4,
+  background: 'rgba(20, 22, 24, 0.92)',
+  padding: 6,
+  borderRadius: 6,
+  border: '1px solid #333',
+}
+
+function buttonStyle(active: boolean, disabled: boolean): React.CSSProperties {
+  return {
+    ...BUTTON_STYLE,
+    background: active ? '#5a4a1a' : BUTTON_STYLE.background,
+    borderColor: active ? '#aa8a3a' : BUTTON_STYLE.border?.toString().split(' ').pop(),
+    opacity: disabled ? 0.5 : 1,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+  }
+}
+
+function gardenLabel(type: PlacementType, prefabSlug?: string | null): string {
+  if (type === 'prefab') return prefabSlug ?? 'Prefab'
+  if (type === 'bed') return 'Bed'
+  if (type === 'plant') return 'Plant'
+  return type
+}
+
+function houseStatusText(type: HousePlacementType, hasFirstCorner: boolean): string {
+  if (type === 'wall') {
+    return hasFirstCorner
+      ? 'Click second corner (Esc to cancel)'
+      : 'Click first corner (Esc to cancel)'
+  }
+  if (type === 'door') return 'Tap a wall to place door (Esc to cancel)'
+  return 'Tap a wall to place window (Esc to cancel)'
+}
+
+export default function MainToolbar() {
+  const placement = useGarden((s) => s.placement)
+  const setPlacement = useGarden((s) => s.setPlacement)
+  const housePlacement = useGarden((s) => s.housePlacement)
+  const setHousePlacement = useGarden((s) => s.setHousePlacement)
+
+  // Esc cancels whichever placement is active. Garden takes precedence (it's
+  // the simpler pipeline) but in practice the two are mutually exclusive
+  // since arming one cancels the other below.
+  useEffect(() => {
+    if (!placement && !housePlacement) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (placement) setPlacement(null)
+      if (housePlacement) setHousePlacement(null)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [placement, housePlacement, setPlacement, setHousePlacement])
+
+  const isGardenPicking = placement?.type === 'prefab' && !placement.prefabSlug
+  const isGardenPlacing = !!placement && !isGardenPicking
+  const isHousePlacing = !!housePlacement
+  const hasFirstCorner = !!housePlacement?.pendingFirstCorner
+  // Any placement at all disables the OTHER mode's buttons too — mirrors the
+  // pre-merge behavior where switching modes via the toolbar called the other
+  // setter to cancel. (The cross-mode disabled logic lives in the helpers
+  // below; the flags above feed those helpers.)
+
+  const enterGarden = (type: PlacementType, prefabSlug?: string) => {
+    // Entering garden placement cancels any house placement.
+    setHousePlacement(null)
+    setPlacement({ type, prefabSlug: prefabSlug ?? null })
+  }
+
+  const enterHouse = (type: HousePlacementType) => {
+    // Entering house placement cancels any garden placement.
+    setPlacement(null)
+    setHousePlacement({ type, pendingFirstCorner: null })
+  }
+
+  const gardenDisabled = (myType: PlacementType): boolean =>
+    (isGardenPlacing && placement?.type !== myType) || isHousePlacing
+
+  const houseDisabled = (myType: HousePlacementType): boolean =>
+    (isHousePlacing && housePlacement?.type !== myType) || isGardenPlacing
+
+  return (
+    <>
+      {isGardenPlacing && placement && (
+        <div
+          style={PILL_STYLE}
+          role="status"
+          onClick={() => setPlacement(null)}
+          title="Click to cancel placement"
+        >
+          Click ground to place {gardenLabel(placement.type, placement.prefabSlug)} (Esc to cancel)
+        </div>
+      )}
+      {housePlacement && (
+        <div
+          style={PILL_STYLE}
+          role="status"
+          onClick={() => setHousePlacement(null)}
+          title="Click to cancel"
+        >
+          {houseStatusText(housePlacement.type, hasFirstCorner)}
+        </div>
+      )}
+
+      <div style={BAR_STYLE}>
+        {isGardenPicking && (
+          <div style={PICKER_STYLE}>
+            {PREFAB_SLUGS.map((slug) => (
+              <button
+                key={slug}
+                style={BUTTON_STYLE}
+                onClick={() => enterGarden('prefab', slug)}
+              >
+                {slug}
+              </button>
+            ))}
+            <button style={BUTTON_STYLE} onClick={() => setPlacement(null)}>
+              Cancel
+            </button>
+          </div>
+        )}
+
+        <div style={BUTTON_ROW_STYLE}>
+          <div style={SECTION_STYLE}>
+            <span style={SECTION_LABEL_STYLE}>Garden</span>
+            <button
+              style={buttonStyle(placement?.type === 'bed', gardenDisabled('bed'))}
+              disabled={gardenDisabled('bed')}
+              onClick={() => (placement?.type === 'bed' ? setPlacement(null) : enterGarden('bed'))}
+            >
+              + Bed
+            </button>
+            <button
+              style={buttonStyle(placement?.type === 'plant', gardenDisabled('plant'))}
+              disabled={gardenDisabled('plant')}
+              onClick={() => (placement?.type === 'plant' ? setPlacement(null) : enterGarden('plant'))}
+            >
+              + Plant
+            </button>
+            <button
+              style={buttonStyle(placement?.type === 'prefab', isHousePlacing)}
+              disabled={isHousePlacing}
+              onClick={() => {
+                if (placement?.type === 'prefab') setPlacement(null)
+                else {
+                  setHousePlacement(null)
+                  setPlacement({ type: 'prefab', prefabSlug: null })
+                }
+              }}
+            >
+              + Prefab
+            </button>
+          </div>
+
+          <div style={DIVIDER_STYLE} aria-hidden="true" />
+
+          <div style={SECTION_STYLE}>
+            <span style={SECTION_LABEL_STYLE}>House</span>
+            <button
+              style={buttonStyle(housePlacement?.type === 'wall', houseDisabled('wall'))}
+              disabled={houseDisabled('wall')}
+              onClick={() => (housePlacement?.type === 'wall' ? setHousePlacement(null) : enterHouse('wall'))}
+            >
+              + Wall
+            </button>
+            <button
+              style={buttonStyle(housePlacement?.type === 'door', houseDisabled('door'))}
+              disabled={houseDisabled('door')}
+              onClick={() => (housePlacement?.type === 'door' ? setHousePlacement(null) : enterHouse('door'))}
+            >
+              + Door
+            </button>
+            <button
+              style={buttonStyle(housePlacement?.type === 'window', houseDisabled('window'))}
+              disabled={houseDisabled('window')}
+              onClick={() => (housePlacement?.type === 'window' ? setHousePlacement(null) : enterHouse('window'))}
+            >
+              + Window
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}

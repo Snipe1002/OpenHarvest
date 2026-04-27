@@ -25,6 +25,7 @@ import type {
   Transform,
 } from '../api/types'
 import { useGarden } from '../store/garden'
+import { formatLength, parseLength, type Units } from '../store/unitsHelpers'
 
 const PILL_STYLE: React.CSSProperties = {
   display: 'flex',
@@ -108,9 +109,15 @@ const NUM_INPUT: React.CSSProperties = {
   fontFamily: 'inherit',
 }
 
-function fmt(n: number): string {
-  if (!Number.isFinite(n)) return '0'
-  return (Math.round(n * 100) / 100).toString()
+/**
+ * Format a length in meters for display in the active unit system. We use
+ * `formatLength` for everything length-bearing (positions, box sizes,
+ * cylinder radius/height) so the inspector stays consistent with the
+ * SnapChip and unit toggle.
+ */
+function fmt(n: number, units: Units): string {
+  if (!Number.isFinite(n)) return units === 'metric' ? '0 m' : "0'0\""
+  return formatLength(n, units)
 }
 
 function typeLabel(entity: GardenEntity): string {
@@ -144,43 +151,54 @@ function anchorOffsetY(entity: GardenEntity): number {
 
 interface NumberFieldProps {
   label: string
+  /** Always in meters (the canonical internal unit). */
   value: number
+  /** Callback receives the new value in meters. */
   onCommit: (next: number) => void
-  step?: number
+  /** Minimum legal value in meters. */
   min?: number
 }
 
-function NumberField({ label, value, onCommit, step = 0.1, min }: NumberFieldProps) {
-  const [draft, setDraft] = useState<string>(fmt(value))
+/**
+ * Length-bearing input that displays + parses the active unit system.
+ *
+ * Internally `value` is always meters; we run it through `formatLength` for
+ * display and `parseLength` for commit so the user can type either system's
+ * shorthand (e.g. `5'0"`, `1.5 m`, `60in`, `1.5`). On unit-system change the
+ * draft re-syncs to the new format automatically.
+ */
+function NumberField({ label, value, onCommit, min }: NumberFieldProps) {
+  const units = useGarden((s) => s.units)
+  const [draft, setDraft] = useState<string>(fmt(value, units))
   useEffect(() => {
-    setDraft(fmt(value))
-  }, [value])
+    setDraft(fmt(value, units))
+  }, [value, units])
   const commit = () => {
-    const n = parseFloat(draft)
-    if (!Number.isFinite(n)) {
-      setDraft(fmt(value))
+    const meters = parseLength(draft, units)
+    if (meters === null || !Number.isFinite(meters)) {
+      setDraft(fmt(value, units))
       return
     }
-    if (typeof min === 'number' && n < min) {
-      setDraft(fmt(value))
+    if (typeof min === 'number' && meters < min) {
+      setDraft(fmt(value, units))
       return
     }
-    if (n !== value) onCommit(n)
+    if (meters !== value) onCommit(meters)
   }
   return (
     <label style={ROW_STYLE}>
       <span style={TINY_LABEL}>{label}</span>
       <input
         style={NUM_INPUT}
-        type="number"
-        step={step}
+        type="text"
+        inputMode="decimal"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
           if (e.key === 'Escape') {
-            setDraft(fmt(value))
+            setDraft(fmt(value, units))
             ;(e.target as HTMLInputElement).blur()
           }
         }}
@@ -345,17 +363,17 @@ export default function InspectorCard() {
       const s = g.size ?? { x: 1, y: 1, z: 1 }
       return (
         <div style={ROW_STYLE}>
-          <NumberField label="W" value={s.x} step={0.1} min={0.01} onCommit={(n) => updateBoxSize('x', n)} />
-          <NumberField label="H" value={s.y} step={0.1} min={0.01} onCommit={(n) => updateBoxSize('y', n)} />
-          <NumberField label="L" value={s.z} step={0.1} min={0.01} onCommit={(n) => updateBoxSize('z', n)} />
+          <NumberField label="W" value={s.x} min={0.01} onCommit={(n) => updateBoxSize('x', n)} />
+          <NumberField label="H" value={s.y} min={0.01} onCommit={(n) => updateBoxSize('y', n)} />
+          <NumberField label="L" value={s.z} min={0.01} onCommit={(n) => updateBoxSize('z', n)} />
         </div>
       )
     }
     if (g.kind === 'Cylinder') {
       return (
         <div style={ROW_STYLE}>
-          <NumberField label="R" value={g.radius ?? 0.04} step={0.01} min={0.01} onCommit={(n) => updateCylinder('radius', n)} />
-          <NumberField label="H" value={g.height ?? 0.4} step={0.1} min={0.01} onCommit={(n) => updateCylinder('height', n)} />
+          <NumberField label="R" value={g.radius ?? 0.04} min={0.01} onCommit={(n) => updateCylinder('radius', n)} />
+          <NumberField label="H" value={g.height ?? 0.4} min={0.01} onCommit={(n) => updateCylinder('height', n)} />
         </div>
       )
     }
@@ -363,9 +381,9 @@ export default function InspectorCard() {
       const s = g.size
       return (
         <div style={ROW_STYLE}>
-          <NumberField label="W" value={s.x} step={0.1} min={0.01} onCommit={(n) => updateBoxSize('x', n)} />
-          <NumberField label="H" value={s.y} step={0.1} min={0.01} onCommit={(n) => updateBoxSize('y', n)} />
-          <NumberField label="L" value={s.z} step={0.1} min={0.01} onCommit={(n) => updateBoxSize('z', n)} />
+          <NumberField label="W" value={s.x} min={0.01} onCommit={(n) => updateBoxSize('x', n)} />
+          <NumberField label="H" value={s.y} min={0.01} onCommit={(n) => updateBoxSize('y', n)} />
+          <NumberField label="L" value={s.z} min={0.01} onCommit={(n) => updateBoxSize('z', n)} />
         </div>
       )
     }
