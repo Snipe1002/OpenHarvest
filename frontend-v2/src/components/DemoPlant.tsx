@@ -19,6 +19,7 @@ import { Outlines } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import type { GardenEntity, Quaternion } from '../api/types'
 import { useGarden } from '../store/garden'
+import { useTranslateDrag } from './useTranslateDrag'
 
 function quaternionToEuler(q: Quaternion): [number, number, number] {
   const tq = new THREE.Quaternion(q.x, q.y, q.z, q.w)
@@ -51,6 +52,8 @@ function resolveHeight(entity: GardenEntity): number {
 export default function DemoPlant({ entity }: DemoPlantProps) {
   const selectEntity = useGarden((s) => s.selectEntity)
   const isSelected = useGarden((s) => s.selectedEntityId === entity.id)
+  const isTranslating = useGarden((s) => s.translateModeId === entity.id)
+  const drag = useTranslateDrag(entity)
 
   const { x: px, y: py, z: pz } = entity.transform.position
   const stemHeight = resolveHeight(entity)
@@ -68,13 +71,23 @@ export default function DemoPlant({ entity }: DemoPlantProps) {
     ],
   )
 
-  const handleSelect = (e: ThreeEvent<PointerEvent>) => {
+  const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+    if (isTranslating) {
+      drag.onPointerDown(e)
+      return
+    }
     e.stopPropagation()
     selectEntity(entity.id)
   }
 
   return (
-    <group position={[px, py, pz]} rotation={groupRotation} onPointerDown={handleSelect}>
+    <group
+      position={[px, py, pz]}
+      rotation={groupRotation}
+      onPointerDown={handlePointerDown}
+      onPointerMove={isTranslating ? drag.onPointerMove : undefined}
+      onPointerUp={isTranslating ? drag.onPointerUp : undefined}
+    >
       {/* Stem */}
       <mesh position={[0, stemHeight / 2, 0]} castShadow>
         <cylinderGeometry args={[stemRadius, stemRadius, stemHeight, 8]} />

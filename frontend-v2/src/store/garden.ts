@@ -12,6 +12,7 @@ import { getGarden, listEntities } from '../api/client'
 import type { Garden, GardenEntity, Guid, Nudge } from '../api/types'
 
 const STORAGE_KEY = 'openharvest:v2:currentGardenId'
+const SNAP_STORAGE_KEY = 'openharvest:v2:snap'
 
 function readPersistedGardenId(): Guid | null {
   if (typeof window === 'undefined') return null
@@ -33,6 +34,32 @@ function writePersistedGardenId(id: Guid | null): void {
   }
 }
 
+/** Allowed snap values in meters. `null` means snap is off. */
+export type SnapValue = null | 0.1 | 0.5 | 1.0
+
+function readPersistedSnap(): SnapValue {
+  if (typeof window === 'undefined') return null
+  try {
+    const v = window.localStorage.getItem(SNAP_STORAGE_KEY)
+    if (v === '0.1') return 0.1
+    if (v === '0.5') return 0.5
+    if (v === '1' || v === '1.0') return 1.0
+    return null
+  } catch {
+    return null
+  }
+}
+
+function writePersistedSnap(v: SnapValue): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (v === null) window.localStorage.removeItem(SNAP_STORAGE_KEY)
+    else window.localStorage.setItem(SNAP_STORAGE_KEY, String(v))
+  } catch {
+    /* no-op */
+  }
+}
+
 /**
  * Active "place new entity" mode. `null` when not placing. Toolbar buttons
  * set this; the ground click handler reads it to decide what to POST.
@@ -42,6 +69,18 @@ export interface PlacementState {
   type: PlacementType
   /** Required when type === 'prefab'. Identifies which prefab catalog entry to spawn. */
   prefabSlug?: string | null
+}
+
+/**
+ * Active "place house element" mode driven by the HouseToolbar. Walls need
+ * two ground clicks (corners), so `pendingFirstCorner` holds the first hit
+ * while we wait for the second. Doors / windows take a single click on a
+ * wall mesh and don't use `pendingFirstCorner`.
+ */
+export type HousePlacementType = 'wall' | 'door' | 'window'
+export interface HousePlacementState {
+  type: HousePlacementType
+  pendingFirstCorner?: [number, number] | null
 }
 
 export interface GardenState {
@@ -59,6 +98,25 @@ export interface GardenState {
   placement: PlacementState | null
   /** Transient error string surfaced as a toast in the edit panel. */
   toast: string | null
+
+  /**
+   * Entity currently being translated via the inspector's drag-to-move mode.
+   * While set, the matching entity component installs drag handlers, the
+   * camera stops orbiting, and a status pill is shown.
+   */
+  translateModeId: Guid | null
+
+  /**
+   * Snap distance in meters for translate / wall-corner placement, or null
+   * for free movement. Persisted to localStorage.
+   */
+  snap: SnapValue
+
+  /** Active house-element placement mode, or null. */
+  housePlacement: HousePlacementState | null
+
+  /** Currently selected Pascal wall id, or null. Drives the wall inspector. */
+  selectedWallId: string | null
 
   /** Switch active garden, persist id, fetch garden + entities, replace state. */
   setCurrentGarden: (id: Guid) => Promise<void>
@@ -79,6 +137,15 @@ export interface GardenState {
   setPlacement: (p: PlacementState | null) => void
   /** Set the transient toast message. */
   setToast: (msg: string | null) => void
+
+  /** Enter / exit translate mode for an entity (or null to cancel). */
+  setTranslateMode: (id: Guid | null) => void
+  /** Set the snap value, persist to localStorage. */
+  setSnap: (v: SnapValue) => void
+  /** Enter / update / exit house-element placement. */
+  setHousePlacement: (p: HousePlacementState | null) => void
+  /** Select / clear a Pascal wall (separate from garden entity selection). */
+  selectWall: (id: string | null) => void
 }
 
 export const useGarden = create<GardenState>((set, get) => ({
@@ -91,6 +158,10 @@ export const useGarden = create<GardenState>((set, get) => ({
   selectedEntityId: null,
   placement: null,
   toast: null,
+  translateModeId: null,
+  snap: readPersistedSnap(),
+  housePlacement: null,
+  selectedWallId: null,
 
   setCurrentGarden: async (id) => {
     if (!id) return
@@ -104,6 +175,9 @@ export const useGarden = create<GardenState>((set, get) => ({
       nudges: [],
       selectedEntityId: null,
       placement: null,
+      translateModeId: null,
+      housePlacement: null,
+      selectedWallId: null,
     })
     writePersistedGardenId(id)
 
@@ -146,7 +220,16 @@ export const useGarden = create<GardenState>((set, get) => ({
   },
 
   selectEntity: (id) => {
-    set({ selectedEntityId: id })
+    // Selecting a garden entity clears any wall selection so we never show
+    // two inspectors at once. Switching away from (or de-selecting) the
+    // entity also exits translate mode — translate without a target makes
+    // no sense.
+    set((s) => ({
+      selectedEntityId: id,
+      selectedWallId: id ? null : s.selectedWallId,
+      translateModeId:
+        s.translateModeId && s.translateModeId !== id ? null : s.translateModeId,
+    }))
   },
 
   getSelected: () => {
@@ -161,5 +244,27 @@ export const useGarden = create<GardenState>((set, get) => ({
 
   setToast: (msg) => {
     set({ toast: msg })
+  },
+
+  setTranslateMode: (id) => {
+    set({ translateModeId: id })
+  },
+
+  setSnap: (v) => {
+    writePersistedSnap(v)
+    set({ snap: v })
+  },
+
+  setHousePlacement: (p) => {
+    set({ housePlacement: p })
+  },
+
+  selectWall: (id) => {
+    // Selecting a wall clears garden entity selection (and vice-versa) so we
+    // never show two inspectors at once.
+    set((s) => ({
+      selectedWallId: id,
+      selectedEntityId: id ? null : s.selectedEntityId,
+    }))
   },
 }))
