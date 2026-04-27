@@ -268,6 +268,12 @@ export default function MultiSelectInspector() {
     return () => window.removeEventListener('keydown', handler)
   }, [groupTranslateActive, setGroupTranslateActive])
 
+  // IMPORTANT: every hook must run on every render — including the
+  // toolbar-offset measurement — otherwise React's hook-order check fires
+  // when this component conditionally returns null below. Keep this above
+  // the early return.
+  const toolbarBottom = useToolbarOffset()
+
   if (selected.length < 2 || !gardenId) return null
 
   const centroid = centroidOf(selected)
@@ -473,7 +479,6 @@ export default function MultiSelectInspector() {
   const buttonDisabled = busy
 
   const breakdown = describeKindBreakdown(selected)
-  const toolbarBottom = useToolbarOffset()
   const wrapStyle: React.CSSProperties = { ...WRAP_STYLE_BASE, bottom: toolbarBottom }
 
   return (
