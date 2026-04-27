@@ -254,6 +254,13 @@
   let bedFirst = null;
   let bedPreview = null;
 
+  // ---------- Phase 5.0 selection state ----------
+  // selectedEntityId is the id of the entity currently shown in the edit panel.
+  // lastSelectedMesh is tracked separately so we can clear the outline cleanly even when the
+  // mesh has been disposed and recreated by the upsert pipeline.
+  let selectedEntityId = null;
+  let lastSelectedMesh = null;
+
   function setMode(next) {
     mode = next;
     buttons.forEach(b => b.classList.toggle("active",
@@ -344,6 +351,29 @@
         if (p) {
           openPlantModal(p);
           setMode(Mode.Idle);
+        }
+      } else if (mode === Mode.Idle) {
+        // Phase 5.0: short-tap selection. The long-press timer was already cleared above; if
+        // wasPress is true, the user tapped on an entity briefly without dragging — select
+        // it. If they tapped on ground or empty space, clear the current selection.
+        if (wasPress) {
+          // pressMesh is already nulled, but we know the tap was on an entity from wasPress.
+          // Re-pick at the current pointer to get the mesh under release. (Pick is cheap.)
+          const m = pickEntity();
+          if (m && m.metadata?.entityId) {
+            selectEntity(m.metadata.entityId);
+          } else {
+            clearSelection();
+          }
+        } else {
+          // No press-on-entity. If the release is on ground (and wasn't a camera drag), clear.
+          // pressOrigin guards against accidental clears mid-pan: only clear on near-stationary tap.
+          const dx = scene.pointerX - pressOrigin.x;
+          const dy = scene.pointerY - pressOrigin.y;
+          if (dx * dx + dy * dy <= 100) {
+            const m = pickEntity();
+            if (!m) clearSelection();
+          }
         }
       }
     }
@@ -552,6 +582,9 @@
     try {
       await Api.deleteEntity(gardenId, eid);
       disposeEntity(eid);
+      // Phase 5.0: if the deleted entity was the one shown in the edit panel, clear it.
+      // The SignalR handler does this too, but local-first prevents a brief stale flash.
+      if (selectedEntityId === eid) clearSelection();
       setStatus("deleted");
     } catch (e) { console.error(e); setStatus("delete failed"); }
   }
@@ -626,6 +659,8 @@
         // Replace mesh+label with new name.
         disposeEntity(eid);
         meshForEntity(updated);
+        // Phase 5.0: keep the edit panel coherent if this entity is currently selected.
+        if (selectedEntityId === eid) selectEntity(eid);
         setStatus("renamed");
       } catch (e) { console.error(e); setStatus("rename failed"); }
     };
@@ -832,6 +867,8 @@
           },
         });
         rec.entity = updated;
+        // Phase 5.0: refresh the edit panel inputs if this is the selected entity.
+        if (selectedEntityId === eid) renderEditPanel(updated);
         setStatus(`moved to (${newPos.x.toFixed(1)}, ${newPos.z.toFixed(1)})`);
       } catch (e) {
         console.error(e);
@@ -930,6 +967,8 @@
         // payload. SignalR will broadcast the same upsert; applyEntityUpsert is idempotent.
         disposeEntity(eid);
         meshForEntity(updated);
+        // Phase 5.0: keep panel coherent.
+        if (selectedEntityId === eid) selectEntity(eid);
         setStatus(`resized to ${w.toFixed(1)}×${d.toFixed(1)}`);
       } catch (e) { console.error(e); setStatus("resize failed"); }
     };
@@ -942,6 +981,206 @@
     setTimeout(() => { wInput.focus(); wInput.select(); }, 50);
   }
 
+  // ---------- Phase 5.0 selection + persistent edit panel ----------
+  // selectEntity/clearSelection are the single entry points for changing what's in the
+  // panel. They also own the Babylon outline state so highlight + panel never drift apart.
+  function selectEntity(eid) {
+    // Clear the previous outline first — even if we're re-selecting the same entity, the
+    // mesh may have been disposed and recreated (upsert path).
+    if (lastSelectedMesh && !lastSelectedMesh.isDisposed()) {
+      lastSelectedMesh.renderOutline = false;
+    }
+    const rec = meshRegistry.get(eid);
+    if (!rec) { clearSelection(); return; }
+    selectedEntityId = eid;
+    lastSelectedMesh = rec.mesh;
+    rec.mesh.renderOutline = true;
+    rec.mesh.outlineWidth = 0.05;
+    rec.mesh.outlineColor = new BABYLON.Color3(0.30, 0.85, 0.45);
+    renderEditPanel(rec.entity);
+    document.getElementById("editPanel").classList.add("open");
+  }
+
+  function clearSelection() {
+    if (lastSelectedMesh && !lastSelectedMesh.isDisposed()) {
+      lastSelectedMesh.renderOutline = false;
+    }
+    selectedEntityId = null;
+    lastSelectedMesh = null;
+    const panel = document.getElementById("editPanel");
+    panel.classList.remove("open");
+    // Reset to empty-state markup so the next open doesn't briefly flash stale data.
+    const content = panel.querySelector(".ep-content");
+    if (content) content.innerHTML = `<div class="ep-empty">Tap a bed or plant to edit</div>`;
+  }
+
+  function renderEditPanel(entity) {
+    const content = document.querySelector("#editPanel .ep-content");
+    if (!entity) {
+      content.innerHTML = `<div class="ep-empty">Tap a bed or plant to edit</div>`;
+      return;
+    }
+    const t = entity.transform || {};
+    const pos = t.position || { x: 0, y: 0, z: 0 };
+    const g = entity.geometry || {};
+    const size = g.size || { x: 1, y: 1, z: 1 };
+    const isBed = entity.kind === "Bed";
+    const isPlant = entity.kind === "Plant";
+    content.innerHTML = `
+      <div class="ep-header">
+        <span>${escapeHtml(entity.kind)}: ${escapeHtml(entity.name || "")}</span>
+        <span class="ep-close" data-act="close" title="Close">×</span>
+      </div>
+      <div class="ep-section">
+        <label>Name</label>
+        <input type="text" id="ep-name" value="${escapeHtml(entity.name || "")}" placeholder="Entity name" />
+      </div>
+      ${isPlant ? `
+      <div class="ep-section">
+        <label>Crop</label>
+        <input type="text" id="ep-cropref" value="${escapeHtml(entity.cropRef || "")}" placeholder="Tap to change crop..." readonly />
+      </div>` : ""}
+      <div class="ep-section">
+        <label>Position (ft)</label>
+        <div class="ep-row">
+          <input type="number" id="ep-px" step="0.5" value="${(+pos.x).toFixed(2)}" title="X" />
+          <input type="number" id="ep-py" step="0.5" value="${(+pos.y).toFixed(2)}" title="Y" />
+          <input type="number" id="ep-pz" step="0.5" value="${(+pos.z).toFixed(2)}" title="Z" />
+        </div>
+      </div>
+      ${isBed ? `
+      <div class="ep-section">
+        <label>Size (ft)</label>
+        <div class="ep-row row-2">
+          <input type="number" id="ep-sw" min="1" max="30" step="0.5" value="${(+size.x).toFixed(1)}" title="Width" />
+          <input type="number" id="ep-sd" min="1" max="30" step="0.5" value="${(+size.z).toFixed(1)}" title="Depth" />
+        </div>
+      </div>` : ""}
+      <div class="ep-section">
+        <label>Tags</label>
+        <div class="tags-stub">Tags coming in Phase 5.3</div>
+      </div>
+      <div class="ep-actions">
+        <button data-act="photo" title="Photo">📷</button>
+        ${isPlant
+          ? `<button data-act="diagnose" title="Diagnose">🔍</button>`
+          : `<button disabled title="Plants only">🔍</button>`}
+        <button data-act="duplicate" title="Duplicate">📋</button>
+        <button data-act="move" title="Move (drag)">🚚</button>
+        <button data-act="delete" class="danger" title="Delete">🗑</button>
+      </div>
+    `;
+
+    const eid = entity.id;
+
+    // Name edit — opens existing rename modal so the same flow handles crop autocomplete.
+    const nameInput = content.querySelector("#ep-name");
+    if (nameInput) {
+      nameInput.addEventListener("focus", () => {
+        nameInput.blur();
+        openRenameModal(eid);
+      });
+    }
+
+    // Crop chip — Plants only. Tap → existing rename flow (which doubles as crop change for
+    // plants since it embeds the crop autocomplete).
+    if (isPlant) {
+      const cropInput = content.querySelector("#ep-cropref");
+      if (cropInput) {
+        cropInput.addEventListener("click", () => openRenameModal(eid));
+      }
+    }
+
+    // Position commit — PATCH on blur or Enter. Replace the mesh + label using the same
+    // dispose+recreate pipeline used by Resize so SignalR upserts and inline edits agree.
+    const px = content.querySelector("#ep-px");
+    const py = content.querySelector("#ep-py");
+    const pz = content.querySelector("#ep-pz");
+    const commitPos = async () => {
+      const newPos = { x: +px.value, y: +py.value, z: +pz.value };
+      // Skip the round-trip if nothing actually changed — avoids spurious SignalR fanout.
+      if (newPos.x === +pos.x && newPos.y === +pos.y && newPos.z === +pos.z) return;
+      try {
+        const updated = await Api.updateEntity(gardenId, eid, {
+          transform: {
+            position: newPos,
+            rotation: { x: 0, y: 0, z: 0, w: 1 },
+            scale: entity.transform?.scale || { x: 1, y: 1, z: 1 },
+          },
+        });
+        disposeEntity(eid);
+        meshForEntity(updated);
+        selectEntity(eid);
+        setStatus(`moved to (${newPos.x.toFixed(1)}, ${newPos.z.toFixed(1)})`);
+      } catch (e) { console.error(e); setStatus("position update failed"); }
+    };
+    for (const el of [px, py, pz]) {
+      if (!el) continue;
+      el.addEventListener("change", commitPos);
+      el.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); el.blur(); } });
+    }
+
+    if (isBed) {
+      const sw = content.querySelector("#ep-sw");
+      const sd = content.querySelector("#ep-sd");
+      const commitSize = async () => {
+        const w = Math.max(1, Math.min(30, +sw.value));
+        const d = Math.max(1, Math.min(30, +sd.value));
+        if (w === +size.x && d === +size.z) return;
+        try {
+          const updated = await Api.updateEntity(gardenId, eid, {
+            geometry: { kind: "Box", size: { x: w, y: Number(size.y) || 0.4, z: d } },
+          });
+          disposeEntity(eid);
+          meshForEntity(updated);
+          selectEntity(eid);
+          setStatus(`resized to ${w.toFixed(1)}×${d.toFixed(1)}`);
+        } catch (e) { console.error(e); setStatus("resize failed"); }
+      };
+      for (const el of [sw, sd]) {
+        if (!el) continue;
+        el.addEventListener("change", commitSize);
+        el.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); el.blur(); } });
+      }
+    }
+
+    // Header close.
+    content.querySelector('[data-act="close"]')?.addEventListener("click", clearSelection);
+
+    // Action row.
+    content.querySelector('[data-act="photo"]')?.addEventListener("click", () => openPhotosModal(eid));
+    // Diagnose lives inside the photos modal already; open it and let the user tap "Diagnose".
+    content.querySelector('[data-act="diagnose"]')?.addEventListener("click", () => openPhotosModal(eid));
+    content.querySelector('[data-act="duplicate"]')?.addEventListener("click", async () => {
+      // Offset +1.0 ft on X so the duplicate doesn't z-fight the original. Server returns the
+      // new entity, mesh appears via the existing upsert path; we then select it so the user
+      // can drag/resize without an extra tap.
+      const offset = 1.0;
+      const newPos = { x: pos.x + offset, y: pos.y, z: pos.z };
+      const body = {
+        kind: entity.kind,
+        name: entity.name,
+        cropRef: entity.cropRef,
+        parentId: entity.parentId,
+        transform: {
+          position: newPos,
+          rotation: { x: 0, y: 0, z: 0, w: 1 },
+          scale: entity.transform?.scale || { x: 1, y: 1, z: 1 },
+        },
+        geometry: entity.geometry,
+      };
+      try {
+        const created = await Api.addEntity(gardenId, body);
+        // SignalR will also upsert this; the registry is idempotent so a double-create is fine.
+        if (!meshRegistry.has(created.id)) meshForEntity(created);
+        selectEntity(created.id);
+        setStatus("duplicated");
+      } catch (e) { console.error(e); setStatus("duplicate failed"); }
+    });
+    content.querySelector('[data-act="move"]')?.addEventListener("click", () => startMove(eid));
+    content.querySelector('[data-act="delete"]')?.addEventListener("click", () => deleteEntityById(eid));
+  }
+
   // ---------- live sync (SignalR) ----------
   let connection = null;
 
@@ -950,10 +1189,16 @@
     // Idempotent: dispose any existing mesh for this id, recreate from server data.
     if (meshRegistry.has(entity.id)) disposeEntity(entity.id);
     meshForEntity(entity);
+    // Keep the edit panel's selection visuals coherent across upserts. The mesh was just
+    // recreated, so the outline + panel inputs need to be re-applied against the fresh data.
+    if (selectedEntityId === entity.id) {
+      selectEntity(entity.id);
+    }
   }
 
   function applyEntityDelete(entityId) {
     if (meshRegistry.has(entityId)) disposeEntity(entityId);
+    if (selectedEntityId === entityId) clearSelection();
   }
 
   async function connectHub(gid) {
@@ -1189,7 +1434,7 @@
       entities.forEach(meshForEntity);
       setStatus(entities.length === 0
         ? "empty garden — tap Bed or Plant to start"
-        : `loaded ${entities.length} entities — long-press to edit`);
+        : `loaded ${entities.length} entities — tap to select, long-press for radial`);
       // Live sync over SignalR.
       connectHub(gardenId);
       // Probe advisor configuration so the Ask button reflects state.
