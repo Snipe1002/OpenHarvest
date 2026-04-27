@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using OpenHarvest.API.Hubs;
 using OpenHarvest.Domain.Entities;
@@ -119,6 +120,18 @@ public class GardensController : ControllerBase
             CreatedUtc = now,
             ModifiedUtc = now,
         };
+        // Phase 5.2.2 — opaque per-entity Extensions bag, used today for things like
+        // Extensions["color"] (per-instance prefab tint). The DTO surface is `IDictionary<string,
+        // JsonElement>` so the controller doesn't have to know about every key the client sends —
+        // the storage column is jsonb, so adding new keys later requires no schema change.
+        if (req.Extensions is { Count: > 0 })
+        {
+            foreach (var kv in req.Extensions)
+            {
+                if (string.IsNullOrWhiteSpace(kv.Key)) continue;
+                entity.Extensions[kv.Key] = kv.Value;
+            }
+        }
         await _repo.AddEntityAsync(entity, ct);
         await _broadcaster.EntityUpserted(id, entity, ct);
         return CreatedAtAction(nameof(GetEntity), new { id, entityId = entity.Id }, entity);
@@ -176,6 +189,30 @@ public class GardensController : ControllerBase
         // Phase 5.3 — only touch tags when the caller actually sent the field. Sending an empty
         // array IS meaningful (the user cleared all tags), so we treat null vs [] differently.
         if (req.Tags is not null) entity.Tags = NormalizeTags(req.Tags);
+        // Phase 5.2.2 — Extensions PATCH: a present-but-empty dictionary is a "clear all
+        // extensions" signal; a present non-empty dict merges over the existing keys (so
+        // sending just { "color": "#cabe8c" } doesn't wipe sibling keys). null = leave alone.
+        // Keys whose value is JsonValueKind.Null are removed — that's the wire-level "unset
+        // this field" signal so the client can drop a custom color without crafting a special
+        // endpoint.
+        if (req.Extensions is not null)
+        {
+            if (req.Extensions.Count == 0)
+            {
+                entity.Extensions.Clear();
+            }
+            else
+            {
+                foreach (var kv in req.Extensions)
+                {
+                    if (string.IsNullOrWhiteSpace(kv.Key)) continue;
+                    if (kv.Value.ValueKind == JsonValueKind.Null)
+                        entity.Extensions.Remove(kv.Key);
+                    else
+                        entity.Extensions[kv.Key] = kv.Value;
+                }
+            }
+        }
 
         entity.ModifiedUtc = DateTime.UtcNow;
         await _repo.UpdateEntityAsync(entity, ct);
@@ -208,7 +245,11 @@ public record CreateEntityRequest(
     Guid? ParentId,
     Transform? Transform,
     Geometry? Geometry,
-    string[]? Tags);
+    string[]? Tags,
+    // Phase 5.2.2 — opaque blob for per-instance customizations (e.g. material color). The
+    // server stores keys verbatim; the client owns the schema. Send null to skip; send a dict
+    // to seed entity.Extensions on create.
+    Dictionary<string, JsonElement>? Extensions);
 
 public record UpdateEntityRequest(
     string? Name,
@@ -216,4 +257,8 @@ public record UpdateEntityRequest(
     Guid? ParentId,
     Transform? Transform,
     Geometry? Geometry,
-    string[]? Tags);
+    string[]? Tags,
+    // Phase 5.2.2 — partial PATCH semantics for Extensions. null = leave field alone, empty
+    // dict = clear all keys, non-empty = merge keys (JsonValueKind.Null on a value removes
+    // that key). Lets the client toggle a single custom-color value without wiping siblings.
+    Dictionary<string, JsonElement>? Extensions);

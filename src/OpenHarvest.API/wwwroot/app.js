@@ -190,7 +190,16 @@
   camera.lowerRadiusLimit = 3;
   camera.upperRadiusLimit = 80;
   camera.wheelDeltaPercentage = 0.02;
-  camera.panningSensibility = 50;
+  // Phase 5.2.2 (B2) — touch-tuned camera sensitivity. ArcRotateCamera defaults are calibrated
+  // for desktop mice; on a phone they make the camera "whip" with a small finger drag, which
+  // testers consistently flagged. Higher angularSensibility = LESS sensitive (it's a divisor),
+  // and pinchPrecision/wheelPrecision both increase smoothness for zoom. panningSensibility
+  // also raised so two-finger pan doesn't slingshot the world.
+  camera.angularSensibilityX = 4000;
+  camera.angularSensibilityY = 4000;
+  camera.panningSensibility = 1500;
+  camera.pinchPrecision = 50;
+  camera.wheelPrecision = 50;
 
   // Phase 5.1: split lighting into a directional "sun" (animated by SunCalc against
   // wall clock + garden lat/lng) and a low-intensity hemispheric "sky" fill so things
@@ -214,6 +223,37 @@
   ground.material = groundMat;
   ground.metadata = { isGround: true };
 
+  // Phase 5.2.2 (B6) — snap grid overlay. A second, transparent ground plane sits a hair above
+  // the main ground, with a GridMaterial whose gridRatio matches the active snap interval.
+  // Visible only when snap > 0 so the user gets a "where will it land" hint while dragging or
+  // placing without cluttering the scene the rest of the time. Not pickable so it doesn't
+  // interfere with placement raycasts (which target the underlying ground mesh).
+  const snapGrid = BABYLON.MeshBuilder.CreateGround("snapGrid", { width: 60, height: 60 }, scene);
+  snapGrid.position.y = 0.01;
+  snapGrid.isPickable = false;
+  const snapGridMat = new BABYLON.GridMaterial("snapGridMat", scene);
+  snapGridMat.majorUnitFrequency = 5;
+  snapGridMat.minorUnitVisibility = 0.35;
+  snapGridMat.gridRatio = 1.0;          // updated by refreshSnapGrid()
+  snapGridMat.mainColor = new BABYLON.Color3(0, 0, 0);
+  snapGridMat.lineColor = new BABYLON.Color3(0.45, 0.85, 0.55);
+  snapGridMat.opacity = 0.0;
+  snapGridMat.backFaceCulling = false;
+  snapGrid.material = snapGridMat;
+  snapGrid.metadata = { isSnapGrid: true };
+
+  function refreshSnapGrid() {
+    if (!snapGridMat) return;
+    if (snapFt > 0) {
+      snapGridMat.gridRatio = snapFt;
+      snapGridMat.opacity = 0.85;
+      snapGrid.setEnabled(true);
+    } else {
+      snapGridMat.opacity = 0.0;
+      snapGrid.setEnabled(false);
+    }
+  }
+
   // ---------- entity → mesh registry ----------
   /** @type {Map<string, {entity:any, mesh:BABYLON.Mesh, label:BABYLON.Mesh|null}>} */
   const meshRegistry = new Map();
@@ -221,11 +261,12 @@
   function disposeEntity(eid) {
     const rec = meshRegistry.get(eid);
     if (!rec) return;
-    // Phase 5.3 — detach children before disposing the parent. Babylon's Mesh.dispose() with
-    // default doNotRecurse=false would otherwise drag every parented child mesh into the
-    // grave, but those children are tracked separately in meshRegistry and getting recreated
-    // by an upsert/resize flow shouldn't take their pots and plants with them. Each child's
-    // mesh is reparented to scene root with its current absolutePosition preserved.
+    // Phase 5.3 — detach REGISTERED children before disposing the parent. Babylon's
+    // Mesh.dispose() with default doNotRecurse=false would otherwise drag every parented
+    // child mesh into the grave, but those children are tracked separately in meshRegistry
+    // and getting recreated by an upsert/resize flow shouldn't take their pots and plants
+    // with them. Each registered child's mesh is reparented to scene root with its current
+    // absolutePosition preserved.
     if (rec.mesh && !rec.mesh.isDisposed()) {
       for (const [, child] of meshRegistry) {
         if (child.mesh?.parent !== rec.mesh) continue;
@@ -234,13 +275,50 @@
         child.mesh.parent = null;
         child.mesh.position = ap;
       }
+      // Phase 5.2.2 (A3) — actively dispose any UNREGISTERED Babylon child meshes. Prefab
+      // builders that hit the mergeAndName fallback path (or any future builder that parents
+      // sub-meshes without a meshRegistry entry) leave orphans behind when only the parent is
+      // disposed with default args, which is the "leftover piece after delete" symptom.
+      // We snapshot the child list because dispose() mutates it.
+      const orphans = rec.mesh.getChildMeshes(false).slice();
+      for (const orphan of orphans) {
+        if (orphan.isDisposed()) continue;
+        // Skip registered children — those were already reparented above.
+        const oid = orphan.metadata?.entityId;
+        if (oid && meshRegistry.has(oid)) continue;
+        orphan.dispose(false, true);
+      }
     }
-    rec.label?.dispose();
-    rec.mesh.dispose();
+    rec.label?.dispose(false, true);
+    // Phase 5.2.2 (A1, A3) — dispose materials + textures owned by the entity mesh. Without
+    // disposeMaterialAndTextures=true, materials linger and (more importantly) any GPU-side
+    // resources the mesh held are kept alive, which compounds with the duplicate-mesh symptom
+    // when an upsert race leaves an "old" mesh behind.
+    rec.mesh.dispose(false, true);
     meshRegistry.delete(eid);
+    // Phase 5.2.2 (A1) — paranoid sweep: walk the live scene for any mesh tagged with this
+    // entityId that survived the dispose chain (e.g. because a prior race left an orphan
+    // mesh whose registry entry was overwritten). One last broom pass keeps the scene clean
+    // even when upstream code paths slip up.
+    for (let i = scene.meshes.length - 1; i >= 0; i--) {
+      const m = scene.meshes[i];
+      if (m && !m.isDisposed() && m.metadata?.entityId === eid) {
+        m.dispose(false, true);
+      }
+    }
   }
 
   function meshForEntity(entity) {
+    if (!entity || !entity.id) return null;
+    // Phase 5.2.2 (A1) — make meshForEntity idempotent against the create-flow race. The local
+    // create path (createBed/createPlant/createPrefab/createCustomPrefabInstance) calls
+    // meshForEntity right after addEntity returns. The SignalR `entityUpserted` handler also
+    // calls applyEntityUpsert → meshForEntity. If the SignalR broadcast lands BEFORE the local
+    // meshForEntity invocation, we'd otherwise end up with two meshes for one id (registry
+    // entry overwritten, original orphaned in the scene). Guard here so whoever races second
+    // still gets a clean rebuild.
+    if (meshRegistry.has(entity.id)) disposeEntity(entity.id);
+
     const t = entity.transform || {};
     const pos = t.position || { x: 0, y: 0, z: 0 };
     const scale = t.scale || { x: 1, y: 1, z: 1 };
@@ -325,6 +403,18 @@
       mesh.material = mat;
     }
 
+    // Phase 5.2.2 (B5) — per-instance color tint. The user-chosen color (stored in
+    // entity.extensions.color as a #RRGGBB string) overrides the dominant material's
+    // diffuseColor for THIS mesh only. For Box-geometry beds the entity owns its own
+    // StandardMaterial (created above), so we mutate it directly. For prefab merged
+    // meshes the material is a MultiMaterial sharing slots with the rest of the scene's
+    // prefabs; we clone and replace the dominant slot so other instances stay untouched.
+    const colorHex = entity.extensions?.color;
+    if (colorHex && typeof colorHex === "string") {
+      try { applyEntityColor(mesh, colorHex, entity.id); }
+      catch (e) { console.warn("color tint failed", entity.id, e); }
+    }
+
     let label = null;
     if (entity.name) {
       label = makeLabel(entity.id, entity.name, mesh, geom);
@@ -349,6 +439,51 @@
       );
     }
     return mesh;
+  }
+
+  // Phase 5.2.2 (B5) — color helpers. parseHexColor returns null for malformed input so the
+  // caller can fall back to the prefab's built-in palette without crashing the mesh build.
+  function parseHexColor(hex) {
+    if (!hex || typeof hex !== "string") return null;
+    let s = hex.trim();
+    if (s.startsWith("#")) s = s.slice(1);
+    if (s.length === 3) s = s.split("").map(c => c + c).join("");
+    if (!/^[0-9a-fA-F]{6}$/.test(s)) return null;
+    const r = parseInt(s.slice(0, 2), 16) / 255;
+    const g = parseInt(s.slice(2, 4), 16) / 255;
+    const b = parseInt(s.slice(4, 6), 16) / 255;
+    return new BABYLON.Color3(r, g, b);
+  }
+
+  // Override the dominant material's diffuseColor for this mesh. We clone before mutating so
+  // the shared prefab material cache stays clean — other beds keep their wood/terracotta
+  // defaults. For MultiMaterial meshes (prefab merge with multiple materials) we tint only the
+  // FIRST sub-material; soil / glass / metal accents stay their natural color so the user's
+  // tint reads as "wood color" or "pot color" rather than monotone repaint.
+  function applyEntityColor(mesh, hex, eid) {
+    const c = parseHexColor(hex);
+    if (!c || !mesh) return;
+    const mat = mesh.material;
+    if (!mat) return;
+    if (mat instanceof BABYLON.MultiMaterial) {
+      const subs = (mat.subMaterials || []).slice();
+      if (subs.length === 0) return;
+      const cloned = mat.clone(`mat_${eid}_tinted`, true);
+      // The clone keeps the same sub-material array — tint the first non-null entry.
+      for (let i = 0; i < cloned.subMaterials.length; i++) {
+        const sm = cloned.subMaterials[i];
+        if (!sm) continue;
+        const smc = sm.clone(`${sm.name}_${eid}`);
+        if (smc.diffuseColor) smc.diffuseColor = c;
+        cloned.subMaterials[i] = smc;
+        break; // only tint the dominant slot
+      }
+      mesh.material = cloned;
+    } else {
+      const cloned = mat.clone(`mat_${eid}_tinted`);
+      if (cloned.diffuseColor) cloned.diffuseColor = c;
+      mesh.material = cloned;
+    }
   }
 
   function makeLabel(eid, name, parentMesh, geom) {
@@ -495,9 +630,23 @@
   }
 
   function pickEntity() {
-    const pick = scene.pick(scene.pointerX, scene.pointerY,
-      (m) => m.metadata && m.metadata.entityId);
-    return pick.hit ? pick.pickedMesh : null;
+    // Phase 5.2.2 (A2) — use multiPick + nearest-hit selection so two beds whose bounding
+    // boxes overlap in screen space don't end up with picking order determined by mesh
+    // creation order. multiPickWithRay returns every triangle-test hit along the ray; we
+    // pick the one with the smallest distance and a metadata.entityId. This also guards
+    // against future prefab builders that include hidden faces (e.g., a shadow plane) — as
+    // long as those faces sit at the same depth or behind the visible geometry, the visible
+    // surface wins. Falls back to scene.pick if multiPick is unavailable for some reason.
+    const predicate = (m) => m && m.metadata && m.metadata.entityId && m.isPickable;
+    const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
+    const hits = scene.multiPickWithRay(ray, predicate);
+    if (!hits || hits.length === 0) return null;
+    let best = null;
+    for (const h of hits) {
+      if (!h.hit || !h.pickedMesh) continue;
+      if (best === null || h.distance < best.distance) best = h;
+    }
+    return best ? best.pickedMesh : null;
   }
 
   // ---------- pointer handlers ----------
@@ -1490,21 +1639,44 @@
       }
     };
 
+    // Phase 5.2.2 (B7) — clearer drag FSM. The previous implementation moved the mesh on
+    // POINTERDOWN (via followPointer), which felt jarring: a stray tap teleported the bed to
+    // wherever the finger landed before the user even started dragging. Now POINTERDOWN just
+    // ARMS the drag (records that a touch is active and remembers the start point); the mesh
+    // only moves once the user actually drags past a small threshold on POINTERMOVE. A
+    // tap-and-release with no movement is treated as a no-op (cancels the move silently),
+    // matching the "I tapped 🚚 by mistake" recovery path.
+    let moved = false;
+    const DRAG_THRESHOLD_PX = 6;
+    let downX = 0, downY = 0;
     const moveObs = scene.onPointerObservable.add((info) => {
       if (committed) return;
       if (info.type === BABYLON.PointerEventTypes.POINTERDOWN) {
-        // Only arm on left-button (or touch). Any pointerdown counts on touch (button 0).
         dragging = true;
+        moved = false;
+        downX = scene.pointerX;
+        downY = scene.pointerY;
         canvas.style.cursor = "grabbing";
-        followPointer();
       } else if (info.type === BABYLON.PointerEventTypes.POINTERMOVE) {
-        if (dragging) followPointer();
+        if (!dragging) return;
+        if (!moved) {
+          const dx = scene.pointerX - downX;
+          const dy = scene.pointerY - downY;
+          if (dx * dx + dy * dy < DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) return;
+          moved = true;
+        }
+        followPointer();
       } else if (info.type === BABYLON.PointerEventTypes.POINTERUP) {
-        // Only commit if the user actually pressed down inside this move session. This
-        // prevents the trailing pointerup from the radial-menu tap from prematurely ending
-        // the move before the user's first drag.
+        // Trailing POINTERUP from the toolbar tap that armed Move? Ignore — we only commit if
+        // we got our own POINTERDOWN inside this session.
         if (!dragging) return;
         dragging = false;
+        if (!moved) {
+          // Tap with no drag → treat as cancel. The user most likely tapped 🚚 by accident
+          // or wanted to abort. Snap mesh back to origin (no-op since we never moved it).
+          cancel();
+          return;
+        }
         commit();
       }
     });
@@ -1618,6 +1790,123 @@
     modal.querySelector('[data-act="cancel"]').addEventListener("click", () => closeModal());
     modal.querySelector('[data-act="save"]').addEventListener("click", () => save());
     setTimeout(() => { wInput.focus(); wInput.select(); }, 50);
+  }
+
+  // ---------- Phase 5.2.2 style modal (B5) ----------
+  // Per-instance material color. Stored in entity.extensions.color as "#rrggbb" or null when
+  // the user picks "Default". The toolbar 🎨 button opens this; meshForEntity reads the value
+  // and applies it via applyEntityColor() (see above).
+  const STYLE_SWATCHES = [
+    { name: "Default",    hex: null },
+    { name: "Wood",       hex: "#735238" },
+    { name: "White",      hex: "#f1f1f0" },
+    { name: "Grey",       hex: "#7a7c80" },
+    { name: "Black",      hex: "#1a1a1c" },
+    { name: "Terracotta", hex: "#c4683b" },
+    { name: "Red",        hex: "#c0392b" },
+    { name: "Blue",       hex: "#3a78c2" },
+    { name: "Green",      hex: "#3e8f4e" },
+  ];
+
+  function openStyleModal(eid) {
+    const rec = meshRegistry.get(eid);
+    if (!rec) return;
+    closeModal();
+
+    const currentColor = rec.entity.extensions?.color || null;
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    const swatchesHtml = STYLE_SWATCHES.map(s => {
+      const isActive = (currentColor || null) === (s.hex || null);
+      const bg = s.hex || "transparent";
+      const isDefault = s.hex === null ? '1' : '0';
+      return `<div class="opt${isActive ? " active" : ""}" data-hex="${escapeHtml(s.hex || "")}" data-default="${isDefault}" style="background:${escapeHtml(bg)};" title="${escapeHtml(s.name)}"></div>`;
+    }).join("");
+
+    modal.innerHTML = `
+      <h2>🎨 Style</h2>
+      <div class="ai-meta">Pick a swatch or use a custom color. Per-instance — only this entity changes.</div>
+      <div class="color-pick" data-region="swatches">${swatchesHtml}</div>
+      <div class="color-custom-row">
+        <input type="color" data-field="picker" value="${escapeHtml(currentColor || "#cabe8c")}" />
+        <input type="text" data-field="hex" placeholder="#cabe8c" value="${escapeHtml(currentColor || "")}" />
+      </div>
+      <div class="modal-actions">
+        <button data-act="cancel">Cancel</button>
+        <button class="primary" data-act="save">Save</button>
+      </div>
+    `;
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    activeModal = backdrop;
+
+    let chosen = currentColor || null;
+    const swatches = modal.querySelectorAll('.color-pick .opt');
+    const picker = modal.querySelector('input[data-field="picker"]');
+    const hexInput = modal.querySelector('input[data-field="hex"]');
+
+    const setActiveByHex = (hex) => {
+      swatches.forEach(s => {
+        const sh = s.dataset.hex || null;
+        const a = (sh || null) === (hex || null);
+        s.classList.toggle("active", a);
+      });
+    };
+
+    swatches.forEach(opt => {
+      opt.addEventListener("click", () => {
+        chosen = opt.dataset.hex || null;
+        if (chosen) {
+          picker.value = chosen;
+          hexInput.value = chosen;
+        } else {
+          hexInput.value = "";
+        }
+        setActiveByHex(chosen);
+      });
+    });
+
+    picker.addEventListener("input", () => {
+      chosen = picker.value;
+      hexInput.value = chosen;
+      setActiveByHex(chosen);
+    });
+
+    hexInput.addEventListener("input", () => {
+      const v = hexInput.value.trim();
+      // Accept #rgb / #rrggbb. Empty string = default.
+      if (!v) { chosen = null; setActiveByHex(null); return; }
+      if (/^#?[0-9a-fA-F]{3}$/.test(v) || /^#?[0-9a-fA-F]{6}$/.test(v)) {
+        chosen = v.startsWith("#") ? v : "#" + v;
+        try { picker.value = chosen.length === 4
+          ? "#" + chosen[1] + chosen[1] + chosen[2] + chosen[2] + chosen[3] + chosen[3]
+          : chosen; } catch { /* ignore */ }
+        setActiveByHex(chosen);
+      }
+    });
+
+    const save = async () => {
+      closeModal();
+      // PATCH the entity's extensions. Sending null for the color key removes it server-side
+      // (see UpdateEntityRequest handling in GardensController.cs). Sending a hex sets it.
+      const extensionsBody = { color: chosen ? chosen : null };
+      try {
+        const updated = await Api.updateEntity(gardenId, eid, { extensions: extensionsBody });
+        // Force a fresh mesh build so the tint takes effect immediately. The SignalR upsert
+        // would do this anyway but local-first removes the visible flicker.
+        disposeEntity(eid);
+        meshForEntity(updated);
+        if (selectedEntityId === eid) selectEntity(eid);
+        setStatus(chosen ? `color: ${chosen}` : "color: default");
+      } catch (e) { console.error(e); setStatus("style save failed"); }
+    };
+
+    backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) closeModal(); });
+    modal.querySelector('[data-act="cancel"]').addEventListener("click", () => closeModal());
+    modal.querySelector('[data-act="save"]').addEventListener("click", save);
   }
 
   // ---------- Phase 5.3 tags ----------
@@ -1839,6 +2128,11 @@
     resizeBtn.title = canResize ? "Resize" : "Plants don't have a size editor";
     if (canResize) resizeBtn.addEventListener("click", () => openResizeModal(eid));
     fresh.querySelector('[data-act="move"]').addEventListener("click", () => startMove(eid));
+    // Phase 5.2.2 (B5) — Style/color picker. Available for any entity that renders a tintable
+    // mesh, which today means everything except plants (whose green color is semantic). We let
+    // the modal handle the no-op gracefully though, so the button just opens it for plants too.
+    const styleBtn = fresh.querySelector('[data-act="style"]');
+    if (styleBtn) styleBtn.addEventListener("click", () => openStyleModal(eid));
     // Phase 5.3 — tags. Display the count next to the icon so a glance tells the user whether
     // any tags exist; opens the tag editor on tap.
     const tagsBtn = fresh.querySelector('[data-act="tags"]');
@@ -1994,11 +2288,15 @@
     snapFt = next.ft;
     localStorage.setItem("openharvest.snap", String(snapFt));
     refreshChipLabels();
+    // Phase 5.2.2 (B6) — flip the snap grid overlay to match the new interval.
+    refreshSnapGrid();
     setStatus(`snap: ${next.label}`);
   }
   document.getElementById("unitChip")?.addEventListener("click", cycleUnit);
   document.getElementById("snapChip")?.addEventListener("click", cycleSnap);
   refreshChipLabels();
+  // Phase 5.2.2 (B6) — initial snap-grid visibility based on persisted snap setting.
+  refreshSnapGrid();
 
   // ---------- live sync (SignalR) ----------
   let connection = null;
@@ -2303,11 +2601,17 @@
                                          // at solar noon a=0, dirZ=+cos(e) → light shines north.
     sun.direction = new BABYLON.Vector3(dirX, dirY, dirZ).normalize();
 
-    // Day/night curve. Above horizon: ramp 0.30 → 1.0 from horizon to zenith.
-    // Below horizon: a low cool ambient so things stay legible at night.
+    // Day/night curve. Above horizon: ramp from a "moonlit" floor up to full sun at zenith.
+    // Below horizon: same floor — never go pitch black, beds and toolbar stay legible.
+    // Phase 5.2.2 (B1) — bumped the sky/hemispheric floor to 0.35 so the canvas is always
+    // readable on phones; previously the night intensities of 0.05 / 0.18 made the scene
+    // unusable on iPhone Safari at midnight. Sun direction still tracks SunCalc precisely so
+    // dawn/dusk shadows still feel real.
+    const NIGHT_SUN_FLOOR = 0.18;   // gentle directional fill so beds catch a faint highlight
+    const NIGHT_SKY_FLOOR = 0.35;   // hemispheric ambient — the load-bearing legibility light
     if (e > 0) {
       const t = Math.min(1, e / (Math.PI / 2));         // 0 at horizon, 1 at zenith
-      sun.intensity = 0.30 + 0.70 * t;
+      sun.intensity = Math.max(NIGHT_SUN_FLOOR, 0.30 + 0.70 * t);
       // Warm colour near horizon (sunrise/sunset), cooler near zenith.
       const warm = 1.0 - t;                              // 1 at horizon, 0 at zenith
       sun.diffuse = new BABYLON.Color3(
@@ -2316,7 +2620,7 @@
         0.55 + 0.31 * t                                  // 0.55 → 0.86
       );
       sun.specular = sun.diffuse;
-      sky.intensity = 0.25 + 0.20 * t;                   // 0.25 → 0.45
+      sky.intensity = Math.max(NIGHT_SKY_FLOOR, 0.35 + 0.20 * t);  // 0.35 → 0.55
       sky.diffuse = new BABYLON.Color3(
         0.55 + 0.10 * t,
         0.70 + 0.08 * t,
@@ -2327,12 +2631,17 @@
       scene.clearColor = new BABYLON.Color4(0.06 + bgT, 0.07 + bgT, 0.08 + bgT * 1.2, 1);
       void warm; // (warm reserved for future fog tinting)
     } else {
-      sun.intensity = 0.05;
-      sun.diffuse = new BABYLON.Color3(0.30, 0.40, 0.65);
+      // Night: hold the floors but tint cool. We still let the sun direction drift past the
+      // horizon so the directional light hits the underside of objects subtly — feels like
+      // moonlight rather than a flat torch. clearColor is a touch warmer than before so the
+      // canvas reads as "deep dusk / moonlit" rather than "off".
+      sun.intensity = NIGHT_SUN_FLOOR;
+      sun.diffuse = new BABYLON.Color3(0.42, 0.50, 0.78);   // moonlit blue with a hint of warmth
       sun.specular = sun.diffuse;
-      sky.intensity = 0.18;
-      sky.diffuse = new BABYLON.Color3(0.20, 0.28, 0.45);
-      scene.clearColor = new BABYLON.Color4(0.04, 0.05, 0.08, 1);
+      sky.intensity = NIGHT_SKY_FLOOR;
+      sky.diffuse = new BABYLON.Color3(0.40, 0.48, 0.68);
+      sky.groundColor = new BABYLON.Color3(0.20, 0.22, 0.26);
+      scene.clearColor = new BABYLON.Color4(0.07, 0.08, 0.13, 1);
     }
 
     // Phase label from SunCalc times. getTimes() returns Date objects keyed by

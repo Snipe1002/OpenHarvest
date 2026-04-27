@@ -67,11 +67,18 @@
     if (!meshes.length) return null;
     if (meshes.length === 1) {
       meshes[0].name = meshName;
+      meshes[0].refreshBoundingInfo();
       return meshes[0];
     }
     const merged = BABYLON_.Mesh.MergeMeshes(meshes, true, true, undefined, false, true);
     if (merged) {
       merged.name = meshName;
+      // Phase 5.2.2 (A2) — recompute the bounding info from the merged geometry. Without
+      // this, Babylon's picker can fall back to the bounding box of the first source mesh,
+      // which for raised beds was big enough to overlap the neighbouring bed and cause
+      // "tapped the right bed, got the left one" mis-picks. A tight, refreshed bounding
+      // info matches the merged triangles exactly.
+      merged.refreshBoundingInfo();
       return merged;
     }
     // Defensive fallback. Should not happen with current builders.
