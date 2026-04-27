@@ -124,6 +124,18 @@
       if (!res.ok) return [];
       return res.json();
     },
+    // Phase 5.5 — AI-assisted placement planner. POSTs the slugs the user wants placed, gets
+    // back a PlacementPlan { provider, model, suggestions[], summary }. Suggestions carry an
+    // (x, z) world-space coord plus an optional parentEntityId — the PWA then renders them
+    // as ghost markers in the scene and commits them as Plant entities on user tap.
+    async planPlacement(gid, crops) {
+      const res = await fetch(`${BASE}api/v1/advisor/plan/${gid}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ crops })
+      });
+      if (!res.ok) throw new Error("plan failed: " + res.status);
+      return res.json();
+    },
     // Phase 5.4 — user-saved prefab templates ("My Prefabs"). The body for saveCustomPrefab
     // pre-stringifies geometry + tags so the server can store them as opaque JSON blobs without
     // re-parsing — keeps the schema flexible and means a future geometry kind doesn't need a
@@ -2751,7 +2763,7 @@
   async function checkAdvisor() {
     const s = await Api.advisorStatus();
     advisorConfigured = !!s.configured;
-    for (const id of ["askButton", "calendarButton"]) {
+    for (const id of ["askButton", "calendarButton", "planButton"]) {
       const btn = document.getElementById(id);
       if (!btn) continue;
       btn.classList.toggle("unconfigured", !advisorConfigured);
@@ -2894,6 +2906,382 @@
   }
 
   document.getElementById("calendarButton").addEventListener("click", openCalendarModal);
+
+  // ---------- Phase 5.5 — AI-assisted placement ----------
+  //
+  // Opens a modal with a chip-input for picking crops, then POSTs to /api/v1/advisor/plan/{gid}
+  // to get back a list of suggestions. Each suggestion is rendered as a row in the modal AND as
+  // a translucent ghost marker (wireframe sphere + name label) in the 3D scene. Tapping either
+  // commits the suggestion as a real Plant entity at the suggested coordinates with the right
+  // CropRef. Ghost markers are scene-only, never persisted, and cleared when the modal closes.
+  const ghostMarkers = new Map();   // suggestionIndex -> { mesh, label, suggestion, placed }
+  let planModalEl = null;
+
+  function clearGhostMarkers() {
+    for (const m of ghostMarkers.values()) {
+      try { m.mesh?.dispose(); } catch { /* ignore */ }
+      try { m.label?.dispose(); } catch { /* ignore */ }
+    }
+    ghostMarkers.clear();
+  }
+
+  // Build the dashed-sphere ghost marker. We use a wireframe sphere over a transparent fill
+  // so it reads clearly as "preview, not real" against the existing solid plant cylinders.
+  // The associated nameplate is a Babylon Plane with a dynamic-texture label that always faces
+  // the camera. Fade out when the suggestion is committed (placed === true).
+  function drawGhostMarker(idx, sugg, placed) {
+    const x = sugg.position?.x ?? 0;
+    const z = sugg.position?.z ?? 0;
+
+    const sphere = BABYLON.MeshBuilder.CreateSphere(`ghost_${idx}`, { diameter: 1.0, segments: 12 }, scene);
+    sphere.position = new BABYLON.Vector3(x, 0.5, z);
+    sphere.isPickable = true;
+    sphere.metadata = { ghost: true, idx };
+    const mat = new BABYLON.StandardMaterial(`ghostMat_${idx}`, scene);
+    mat.diffuseColor = new BABYLON.Color3(0.27, 0.85, 0.50);
+    mat.emissiveColor = new BABYLON.Color3(0.20, 0.55, 0.30);
+    mat.alpha = placed ? 0.18 : 0.45;
+    mat.wireframe = true;
+    sphere.material = mat;
+
+    // Floating nameplate — a 1.6×0.4 plane high above the marker, billboard-mode aligned to
+    // camera so the text stays readable from any angle. Dynamic texture is sized for ~24px
+    // text rendered crisp on Hi-DPI screens (the canvas is 256×64).
+    const labelText = `${sugg.cropName || sugg.cropRef || "Plant"}${placed ? "  ✓" : ""}`;
+    const label = BABYLON.MeshBuilder.CreatePlane(`ghostLabel_${idx}`, { width: 2.4, height: 0.6 }, scene);
+    label.position = new BABYLON.Vector3(x, 1.6, z);
+    label.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    label.isPickable = true;
+    label.metadata = { ghost: true, idx };
+    const tex = new BABYLON.DynamicTexture(`ghostTex_${idx}`, { width: 384, height: 96 }, scene, true);
+    tex.hasAlpha = true;
+    const ctx = tex.getContext();
+    ctx.clearRect(0, 0, 384, 96);
+    ctx.fillStyle = placed ? "rgba(74, 222, 128, 0.85)" : "rgba(20, 20, 24, 0.85)";
+    ctx.fillRect(0, 0, 384, 96);
+    ctx.font = "bold 36px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
+    ctx.fillStyle = placed ? "#06210d" : "#eee";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(labelText, 192, 48);
+    tex.update();
+    const lmat = new BABYLON.StandardMaterial(`ghostLabelMat_${idx}`, scene);
+    lmat.diffuseTexture = tex;
+    lmat.emissiveTexture = tex;
+    lmat.opacityTexture = tex;
+    lmat.useAlphaFromDiffuseTexture = true;
+    lmat.disableLighting = true;
+    lmat.backFaceCulling = false;
+    label.material = lmat;
+
+    // Tapping a ghost marker commits the suggestion. We re-look-up the row in the modal by
+    // index and trigger the same commit handler used by the in-modal "Place here" button — so
+    // the UI state (placed flag, placed-style) stays in sync regardless of which surface the
+    // user tapped.
+    const onPick = () => {
+      const rec = ghostMarkers.get(idx);
+      if (!rec || rec.placed) return;
+      commitSuggestion(idx);
+    };
+    sphere.actionManager = new BABYLON.ActionManager(scene);
+    sphere.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
+      BABYLON.ActionManager.OnPickTrigger, onPick));
+    label.actionManager = new BABYLON.ActionManager(scene);
+    label.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
+      BABYLON.ActionManager.OnPickTrigger, onPick));
+
+    return { mesh: sphere, label, suggestion: sugg, placed };
+  }
+
+  // Re-render a single ghost marker (e.g. after commit, to fade it out + add the checkmark).
+  // We dispose + rebuild rather than mutating state in-place — simpler than tracking the
+  // dynamic-texture redraw and the marker is cheap.
+  function refreshGhostMarker(idx) {
+    const rec = ghostMarkers.get(idx);
+    if (!rec) return;
+    try { rec.mesh?.dispose(); } catch { /* ignore */ }
+    try { rec.label?.dispose(); } catch { /* ignore */ }
+    const fresh = drawGhostMarker(idx, rec.suggestion, rec.placed);
+    fresh.placed = rec.placed;
+    ghostMarkers.set(idx, fresh);
+  }
+
+  async function commitSuggestion(idx) {
+    const rec = ghostMarkers.get(idx);
+    if (!rec || rec.placed) return;
+    const sugg = rec.suggestion;
+    setStatus(`placing ${sugg.cropName || sugg.cropRef}...`);
+
+    // Resolve a real Crop row when we have a slug — gives us a proper commonName + slug for
+    // the entity body (createPlant in the existing path uses { commonName, slug }). When the
+    // slug doesn't resolve we fall back to the AI's display name with a null cropRef so the
+    // plant still lands; the user can rename it later via the radial.
+    let crop = null;
+    if (sugg.cropRef) {
+      try {
+        const list = await Api.searchCrops(sugg.cropRef);
+        crop = list.find(c => c.slug === sugg.cropRef) || list[0] || null;
+      } catch { /* ignore */ }
+    }
+
+    const x = sugg.position?.x ?? 0;
+    const z = sugg.position?.z ?? 0;
+
+    // ParentId is taken straight from the AI response when present and known to the registry
+    // (so a hallucinated id doesn't blow up the request). Otherwise we let the existing
+    // findContainingBed helper attach to whatever bed contains the suggested point.
+    let parentId = null;
+    if (sugg.parentEntityId && meshRegistry.has(sugg.parentEntityId)) {
+      parentId = sugg.parentEntityId;
+    } else {
+      try { parentId = findContainingBed({ x, y: 0, z }); } catch { parentId = null; }
+    }
+
+    const body = {
+      kind: "Plant",
+      name: crop ? crop.commonName : (sugg.cropName || sugg.cropRef || "Plant"),
+      cropRef: crop ? crop.slug : (sugg.cropRef || null),
+      parentId,
+      transform: {
+        position: { x, y: 0, z },
+        rotation: { x: 0, y: 0, z: 0, w: 1 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      geometry: { kind: "Cylinder", radius: 0.25, height: 1.0 }
+    };
+    try {
+      const created = await Api.addEntity(gardenId, body);
+      meshForEntity(created);
+      setStatus(`placed ${created.name}`);
+      rec.placed = true;
+      ghostMarkers.set(idx, rec);
+      refreshGhostMarker(idx);
+      // Update the matching modal row, if present.
+      if (planModalEl) {
+        const row = planModalEl.querySelector(`.plan-item[data-idx="${idx}"]`);
+        if (row) {
+          row.classList.add("placed");
+          const btn = row.querySelector('button[data-act="place"]');
+          if (btn) { btn.textContent = "✅ Placed"; btn.classList.add("placed"); btn.disabled = true; }
+        }
+      }
+    } catch (e) {
+      console.error("commit suggestion failed", e);
+      setStatus("place failed");
+    }
+  }
+
+  function openPlanModal() {
+    closeModal();
+    clearGhostMarkers();
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.innerHTML = `
+      <h2>🤖 Plan with AI</h2>
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:6px;">
+        Type or pick the crops you want to grow — the advisor will suggest where to put them.
+      </div>
+      <div class="plan-chips" data-chips></div>
+      <div class="tags-input-row">
+        <input type="text" placeholder="Add a crop — start typing (e.g. tomato, basil)..." autocomplete="off" />
+        <button data-act="add">Add</button>
+      </div>
+      <div class="suggestions" data-sugg></div>
+      <div class="plan-actions-bar">
+        <button data-act="run" class="primary" style="padding:10px 16px;background:var(--accent);color:#06210d;border:1px solid var(--accent);border-radius:6px;font-weight:600;cursor:pointer;flex:1;">Get suggestions</button>
+      </div>
+      <div class="ai-output"></div>
+      <div class="plan-list"></div>
+      <div class="modal-actions">
+        <button data-act="placeAll">Place all</button>
+        <button data-act="close">Close</button>
+      </div>
+    `;
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    activeModal = backdrop;
+    planModalEl = modal;
+
+    const chipsEl = modal.querySelector("[data-chips]");
+    const suggEl = modal.querySelector("[data-sugg]");
+    const input = modal.querySelector("input");
+    const addBtn = modal.querySelector('button[data-act="add"]');
+    const runBtn = modal.querySelector('button[data-act="run"]');
+    const out = modal.querySelector(".ai-output");
+    const list = modal.querySelector(".plan-list");
+    const placeAllBtn = modal.querySelector('button[data-act="placeAll"]');
+
+    // Selected crop slugs the user wants planned. We dedupe (case-insensitive) — the planner
+    // won't return two suggestions for the same slug, and it keeps the chip row tidy.
+    const selected = []; // [{ slug, commonName }]
+    let currentSearch = [];
+    let highlighted = -1;
+
+    const renderChips = () => {
+      chipsEl.innerHTML = "";
+      if (selected.length === 0) {
+        const empty = document.createElement("span");
+        empty.className = "tags-empty";
+        empty.textContent = "No crops yet — add some above.";
+        chipsEl.appendChild(empty);
+        return;
+      }
+      selected.forEach((c, i) => {
+        const chip = document.createElement("span");
+        chip.className = "plan-chip";
+        chip.innerHTML = `${escapeHtml(c.commonName || c.slug)}<span class="x" data-i="${i}">×</span>`;
+        chipsEl.appendChild(chip);
+      });
+    };
+    chipsEl.addEventListener("click", (ev) => {
+      const x = ev.target.closest(".x");
+      if (!x) return;
+      const i = +x.dataset.i;
+      selected.splice(i, 1);
+      renderChips();
+    });
+
+    const renderSugg = (results) => {
+      suggEl.innerHTML = "";
+      currentSearch = results || [];
+      if (!input.value.trim() || currentSearch.length === 0) return;
+      currentSearch.slice(0, 8).forEach((c, i) => {
+        const div = document.createElement("div");
+        div.className = "suggestion" + (i === highlighted ? " highlight" : "");
+        div.innerHTML = `<span class="name">${escapeHtml(c.commonName)}</span>` +
+          (c.scientificName ? `<span class="scientific">${escapeHtml(c.scientificName)}</span>` : "");
+        div.addEventListener("click", () => addCrop(c));
+        suggEl.appendChild(div);
+      });
+    };
+
+    const addCrop = (c) => {
+      if (!c) return;
+      const slug = (c.slug || "").toLowerCase();
+      if (!slug) return;
+      if (selected.some(s => (s.slug || "").toLowerCase() === slug)) return;
+      selected.push({ slug: c.slug, commonName: c.commonName });
+      input.value = "";
+      currentSearch = []; highlighted = -1;
+      suggEl.innerHTML = "";
+      renderChips();
+    };
+
+    let debounce = 0;
+    input.addEventListener("input", () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(async () => {
+        const q = input.value.trim();
+        if (!q) { suggEl.innerHTML = ""; return; }
+        const results = await Api.searchCrops(q);
+        highlighted = -1;
+        renderSugg(results);
+      }, 80);
+    });
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "ArrowDown") { highlighted = Math.min(currentSearch.length - 1, highlighted + 1); renderSugg(currentSearch); ev.preventDefault(); }
+      else if (ev.key === "ArrowUp") { highlighted = Math.max(0, highlighted - 1); renderSugg(currentSearch); ev.preventDefault(); }
+      else if (ev.key === "Enter") {
+        const pick = highlighted >= 0 ? currentSearch[highlighted] : currentSearch[0];
+        if (pick) addCrop(pick);
+        ev.preventDefault();
+      } else if (ev.key === "Escape") {
+        closeModal();
+      }
+    });
+    addBtn.addEventListener("click", () => {
+      const pick = currentSearch[Math.max(0, highlighted)] || currentSearch[0];
+      if (pick) addCrop(pick);
+      else if (input.value.trim()) {
+        // Allow ad-hoc slug entry (lowercased + dashed) when nothing matches, so users
+        // who know an OpenFarm slug don't have to wait for the autocomplete to land it.
+        const slug = input.value.trim().toLowerCase().replace(/\s+/g, "-");
+        addCrop({ slug, commonName: input.value.trim() });
+      }
+    });
+
+    runBtn.addEventListener("click", async () => {
+      if (selected.length === 0) {
+        out.innerHTML = `<div class="ai-spinner" style="color:var(--danger)">add at least one crop first</div>`;
+        return;
+      }
+      out.innerHTML = `<div class="ai-spinner">planning…</div>`;
+      list.innerHTML = "";
+      clearGhostMarkers();
+      try {
+        const plan = await Api.planPlacement(gardenId, selected.map(s => s.slug));
+        out.innerHTML = plan.summary
+          ? `<div class="ai-answer">${escapeHtml(plan.summary)}</div>
+             <div class="ai-meta">${escapeHtml(plan.provider)} · ${escapeHtml(plan.model)} · ${plan.suggestions.length} suggestion(s)</div>`
+          : `<div class="ai-meta">${escapeHtml(plan.provider)} · ${escapeHtml(plan.model)} · ${plan.suggestions.length} suggestion(s)</div>`;
+        renderPlanList(list, plan.suggestions || []);
+      } catch (e) {
+        console.error(e);
+        out.innerHTML = `<div class="ai-spinner" style="color:var(--danger)">plan request failed</div>`;
+      }
+    });
+
+    placeAllBtn.addEventListener("click", async () => {
+      // Walk the in-modal list in order and commit each suggestion that hasn't been placed
+      // yet. We await each commit so the server sees them sequentially — adds latency vs.
+      // Promise.all but keeps SignalR broadcast ordering predictable.
+      const indices = [...ghostMarkers.keys()].sort((a, b) => a - b);
+      for (const i of indices) {
+        const rec = ghostMarkers.get(i);
+        if (rec && !rec.placed) await commitSuggestion(i);
+      }
+    });
+
+    backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) closeModalAndClearGhosts(); });
+    modal.querySelector('button[data-act="close"]').addEventListener("click", () => closeModalAndClearGhosts());
+
+    renderChips();
+    setTimeout(() => input.focus(), 50);
+  }
+
+  function renderPlanList(container, suggestions) {
+    container.innerHTML = "";
+    if (!suggestions || suggestions.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "photo-empty";
+      empty.textContent = "No suggestions — try different crops.";
+      container.appendChild(empty);
+      return;
+    }
+    suggestions.forEach((s, i) => {
+      // Draw the ghost marker BEFORE the row so the scene + modal land together — gives the
+      // user the strongest "the AI proposed this" visual feedback.
+      const rec = drawGhostMarker(i, s, false);
+      ghostMarkers.set(i, rec);
+
+      const row = document.createElement("div");
+      row.className = "plan-item";
+      row.dataset.idx = i;
+      const x = s.position?.x ?? 0, z = s.position?.z ?? 0;
+      row.innerHTML = `
+        <div class="crop">
+          <span>${escapeHtml(s.cropName || s.cropRef || "Plant")}</span>
+          <span class="pos">@ (${x.toFixed(1)}, ${z.toFixed(1)}) ft</span>
+        </div>
+        ${s.rationale ? `<div class="why">${escapeHtml(s.rationale)}</div>` : ""}
+        <div class="row">
+          <button data-act="place">Place here</button>
+        </div>
+      `;
+      row.querySelector('button[data-act="place"]').addEventListener("click", () => commitSuggestion(i));
+      container.appendChild(row);
+    });
+  }
+
+  function closeModalAndClearGhosts() {
+    clearGhostMarkers();
+    planModalEl = null;
+    closeModal();
+  }
+
+  document.getElementById("planButton").addEventListener("click", openPlanModal);
 
   // ---------- nudges ----------
   const shownNudgeKeys = new Set();
