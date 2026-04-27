@@ -35,6 +35,18 @@ import {
 } from '../store/garden'
 
 /**
+ * Status text for the region-paint pill, mirroring `houseStatusText` for the
+ * three-phase lifecycle. The configuring phase is silent here — its UI lives
+ * inline at the rectangle's center via the `<RegionPaint>` 3D component.
+ */
+function regionStatusText(phase: 'awaiting-first-corner' | 'awaiting-second-corner'): string {
+  if (phase === 'awaiting-first-corner') {
+    return 'Drag two corners on the ground to define a region (Esc to cancel)'
+  }
+  return 'Release to set the second corner (Esc to cancel)'
+}
+
+/**
  * Categories shown in the user-facing prefab picker. `plant` is excluded —
  * plants get their own "+ Plant" button. Anything else from the catalog is
  * surfaced under its own group header for readability.
@@ -224,26 +236,30 @@ export default function MainToolbar() {
   const setPlacement = useGarden((s) => s.setPlacement)
   const housePlacement = useGarden((s) => s.housePlacement)
   const setHousePlacement = useGarden((s) => s.setHousePlacement)
+  const regionPaint = useGarden((s) => s.regionPaint)
+  const setRegionPaint = useGarden((s) => s.setRegionPaint)
   const prefabCatalog = useGarden((s) => s.prefabCatalog)
   const pickerGroups = useMemo(() => buildPickerGroups(prefabCatalog), [prefabCatalog])
 
-  // Esc cancels whichever placement is active. Garden takes precedence (it's
-  // the simpler pipeline) but in practice the two are mutually exclusive
-  // since arming one cancels the other below.
+  // Esc cancels whichever placement is active. The three pipelines are
+  // mutually exclusive (arming one cancels the other two via their setters),
+  // so any one of these `if`s will be true.
   useEffect(() => {
-    if (!placement && !housePlacement) return
+    if (!placement && !housePlacement && !regionPaint) return
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       if (placement) setPlacement(null)
       if (housePlacement) setHousePlacement(null)
+      if (regionPaint) setRegionPaint(null)
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [placement, housePlacement, setPlacement, setHousePlacement])
+  }, [placement, housePlacement, regionPaint, setPlacement, setHousePlacement, setRegionPaint])
 
   const isGardenPicking = placement?.type === 'prefab' && !placement.prefabSlug
   const isGardenPlacing = !!placement && !isGardenPicking
   const isHousePlacing = !!housePlacement
+  const isRegionPainting = !!regionPaint
   const hasFirstCorner = !!housePlacement?.pendingFirstCorner
   // Any placement at all disables the OTHER mode's buttons too — mirrors the
   // pre-merge behavior where switching modes via the toolbar called the other
@@ -251,22 +267,34 @@ export default function MainToolbar() {
   // below; the flags above feed those helpers.)
 
   const enterGarden = (type: PlacementType, prefabSlug?: string) => {
-    // Entering garden placement cancels any house placement.
+    // Entering garden placement cancels any house / region paint placement.
     setHousePlacement(null)
+    setRegionPaint(null)
     setPlacement({ type, prefabSlug: prefabSlug ?? null })
   }
 
   const enterHouse = (type: HousePlacementType) => {
-    // Entering house placement cancels any garden placement.
+    // Entering house placement cancels any garden / region placement.
     setPlacement(null)
+    setRegionPaint(null)
     setHousePlacement({ type, pendingFirstCorner: null })
   }
 
+  const enterRegion = () => {
+    // Region paint cancels both garden + house placement (its setter does this
+    // too, but we clear here for symmetry with the other enter* helpers).
+    setPlacement(null)
+    setHousePlacement(null)
+    setRegionPaint({ phase: 'awaiting-first-corner' })
+  }
+
   const gardenDisabled = (myType: PlacementType): boolean =>
-    (isGardenPlacing && placement?.type !== myType) || isHousePlacing
+    (isGardenPlacing && placement?.type !== myType) || isHousePlacing || isRegionPainting
 
   const houseDisabled = (myType: HousePlacementType): boolean =>
-    (isHousePlacing && housePlacement?.type !== myType) || isGardenPlacing
+    (isHousePlacing && housePlacement?.type !== myType) || isGardenPlacing || isRegionPainting
+
+  const regionDisabled: boolean = isGardenPlacing || isHousePlacing
 
   return (
     <>
@@ -288,6 +316,16 @@ export default function MainToolbar() {
           title="Click to cancel"
         >
           {houseStatusText(housePlacement.type, hasFirstCorner)}
+        </div>
+      )}
+      {regionPaint && regionPaint.phase !== 'configuring' && (
+        <div
+          style={PILL_STYLE}
+          role="status"
+          onClick={() => setRegionPaint(null)}
+          title="Click to cancel"
+        >
+          {regionStatusText(regionPaint.phase)}
         </div>
       )}
 
@@ -341,17 +379,26 @@ export default function MainToolbar() {
               + Plant
             </button>
             <button
-              style={buttonStyle(placement?.type === 'prefab', isHousePlacing)}
-              disabled={isHousePlacing}
+              style={buttonStyle(placement?.type === 'prefab', isHousePlacing || isRegionPainting)}
+              disabled={isHousePlacing || isRegionPainting}
               onClick={() => {
                 if (placement?.type === 'prefab') setPlacement(null)
                 else {
                   setHousePlacement(null)
+                  setRegionPaint(null)
                   setPlacement({ type: 'prefab', prefabSlug: null })
                 }
               }}
             >
               + Prefab
+            </button>
+            <button
+              style={buttonStyle(isRegionPainting, regionDisabled)}
+              disabled={regionDisabled}
+              onClick={() => (isRegionPainting ? setRegionPaint(null) : enterRegion())}
+              title="Drag-paint a rectangle of beds in a grid"
+            >
+              + Region
             </button>
           </div>
 

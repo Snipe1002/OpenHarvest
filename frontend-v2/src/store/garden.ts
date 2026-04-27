@@ -215,6 +215,47 @@ export interface HousePlacementState {
   pendingFirstCorner?: [number, number] | null
 }
 
+/**
+ * Drag-paint a rectangular region of beds. Lifecycle:
+ *  - awaiting-first-corner: user has armed region-paint via the toolbar but
+ *    hasn't yet pressed on the ground. Pointer-down on ground begins the drag.
+ *  - awaiting-second-corner: user is mid-drag — first corner is committed and
+ *    the second corner tracks pointer-move until pointer-up.
+ *  - configuring: drag complete; rectangle is fixed and the inline controls
+ *    popover lets the user tweak rows / cols / spacing / size before applying.
+ *
+ * Coordinates are world-space XZ in meters, snapped per the active snap chip
+ * at the moment they're committed (pointer-down for the first corner;
+ * pointer-up for the second). Ghost bed positions are computed from the
+ * snapped corners and the chosen grid params; they do NOT re-snap.
+ */
+export interface RegionPaintAwaitingFirstCorner {
+  phase: 'awaiting-first-corner'
+}
+export interface RegionPaintAwaitingSecondCorner {
+  phase: 'awaiting-second-corner'
+  /** Snapped first corner in world XZ (meters). */
+  firstCorner: [number, number]
+  /** Live, snapped second corner; updates on pointer-move. */
+  secondCorner: [number, number]
+}
+export type RegionBedSize = 'auto' | { x: number; y: number; z: number }
+export interface RegionPaintConfiguring {
+  phase: 'configuring'
+  firstCorner: [number, number]
+  secondCorner: [number, number]
+  rows: number
+  cols: number
+  /** Gap between adjacent ghost beds, meters. */
+  spacingM: number
+  /** Either 'auto' (cell-fits) or an explicit Box size in meters. */
+  bedSize: RegionBedSize
+}
+export type RegionPaintState =
+  | RegionPaintAwaitingFirstCorner
+  | RegionPaintAwaitingSecondCorner
+  | RegionPaintConfiguring
+
 export interface GardenState {
   currentGardenId: Guid | null
   garden: Garden | null
@@ -264,6 +305,14 @@ export interface GardenState {
 
   /** Active house-element placement mode, or null. */
   housePlacement: HousePlacementState | null
+
+  /**
+   * Drag-paint-region-of-beds state, or null when not active. Mutually
+   * exclusive with `placement` and `housePlacement` — entering this mode
+   * cancels the others (and vice versa) so we never have two pipelines
+   * fighting for ground clicks.
+   */
+  regionPaint: RegionPaintState | null
 
   /** Currently selected Pascal wall id, or null. Drives the wall inspector. */
   selectedWallId: string | null
@@ -342,6 +391,12 @@ export interface GardenState {
   setSnapMode: (v: SnapMode) => void
   /** Enter / update / exit house-element placement. */
   setHousePlacement: (p: HousePlacementState | null) => void
+  /**
+   * Enter / update / exit drag-paint-region mode. Passing null cancels.
+   * Entering any non-null state cancels the other placement pipelines so the
+   * three modes can't be armed simultaneously.
+   */
+  setRegionPaint: (s: RegionPaintState | null) => void
   /** Select / clear a Pascal wall (separate from garden entity selection). */
   selectWall: (id: string | null) => void
   /** Toggle / set sticky placement, persist to localStorage. */
@@ -379,6 +434,7 @@ export const useGarden = create<GardenState>((set, get) => ({
   snap: readPersistedSnap(),
   snapMode: readPersistedSnapMode(),
   housePlacement: null,
+  regionPaint: null,
   selectedWallId: null,
   stickyPlacement: readPersistedSticky(),
   multiSelectMode: readPersistedMultiMode(),
@@ -400,6 +456,7 @@ export const useGarden = create<GardenState>((set, get) => ({
       translateModeId: null,
       groupTranslateActive: false,
       housePlacement: null,
+      regionPaint: null,
       selectedWallId: null,
     })
     writePersistedGardenId(id)
@@ -565,6 +622,16 @@ export const useGarden = create<GardenState>((set, get) => ({
 
   setHousePlacement: (p) => {
     set({ housePlacement: p })
+  },
+
+  setRegionPaint: (s) => {
+    // Region-paint is mutually exclusive with the other placement pipelines.
+    // Arming it cancels both; clearing it (null) leaves them alone.
+    if (s) {
+      set({ regionPaint: s, placement: null, housePlacement: null })
+    } else {
+      set({ regionPaint: null })
+    }
   },
 
   selectWall: (id) => {
