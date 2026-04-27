@@ -11,6 +11,8 @@ public class OpenHarvestDbContext : DbContext
     public DbSet<Garden> Gardens => Set<Garden>();
     public DbSet<GardenEntity> Entities => Set<GardenEntity>();
     public DbSet<Crop> Crops => Set<Crop>();
+    // Phase 5.4 — user-saved prefab templates ("My Prefabs"). Per-garden.
+    public DbSet<CustomPrefab> CustomPrefabs => Set<CustomPrefab>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
