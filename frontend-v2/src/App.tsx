@@ -10,6 +10,7 @@ import InspectorCard from './components/InspectorCard'
 import MainToolbar from './components/MainToolbar'
 import MultiChip from './components/MultiChip'
 import MultiSelectInspector from './components/MultiSelectInspector'
+import RegionPaint from './components/RegionPaint'
 import SampleBuilding from './components/SampleBuilding'
 import SnapChip from './components/SnapChip'
 import StickyChip from './components/StickyChip'
@@ -48,6 +49,13 @@ export default function App() {
   const loadPrefabCatalog = useGarden((s) => s.loadPrefabCatalog)
   const entities = useGarden((s) => s.entities)
   const translateModeId = useGarden((s) => s.translateModeId)
+  // Camera orbit pauses while the user is mid-region-drag so the view doesn't
+  // pan with the second-corner pointer move. Other region phases (awaiting
+  // first corner, configuring) leave camera orbit alone — the rectangle is
+  // either not yet started or already locked in.
+  const regionDragActive = useGarden(
+    (s) => s.regionPaint?.phase === 'awaiting-second-corner',
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -187,8 +195,9 @@ export default function App() {
       <SampleBuilding />
       <Viewer selectionManager="custom">
         {/* Camera orbit is suspended while the user is dragging an entity in
-            translate mode so the view doesn't pan with the drag. */}
-        <CameraControls enabled={!translateModeId} />
+            translate mode OR mid-region-paint-drag so the view doesn't pan
+            along with the pointer. */}
+        <CameraControls enabled={!translateModeId && !regionDragActive} />
         <DemoGround />
         {renderChildren(null, new Set())}
         {orphanRoots.map((e) => (
@@ -200,6 +209,10 @@ export default function App() {
             Html mounts it as DOM but tracks the world position. */}
         <InspectorCard />
         <WallInspectorCard />
+        {/* Drag-paint region of beds — visualizes the rectangle outline,
+            ghost beds during configuring, and the inline grid-tweak popover.
+            Pointer pipeline lives on DemoGround.tsx. */}
+        <RegionPaint />
       </Viewer>
       {/* HTML overlays — siblings of the Viewer canvas. The four chips
           (Snap, Sticky, Multi, Units) stack vertically in a top-left

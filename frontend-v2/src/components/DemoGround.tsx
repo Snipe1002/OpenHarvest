@@ -28,6 +28,15 @@ import type { PlacementType } from '../store/garden'
 import { useGarden } from '../store/garden'
 import { createWallBetween, snapXZ } from './houseHelpers'
 
+/** R3F's pointer-event target exposes capture methods inherited from the
+ *  canvas DOM element. The library's TS types declare the target as
+ *  `EventTarget | null` (no capture methods), so we narrow with this small
+ *  interface and cast at the call site. Same pattern used by useTranslateDrag. */
+interface R3FCaptureTarget {
+  setPointerCapture: (id: number) => void
+  releasePointerCapture: (id: number) => void
+}
+
 const IDENTITY_TRANSFORM: Transform = {
   position: { x: 0, y: 0, z: 0 },
   rotation: { x: 0, y: 0, z: 0, w: 1 },
@@ -179,6 +188,74 @@ function buildCreateRequest(
 }
 
 export default function DemoGround() {
+  // ----- Region-paint drag handlers ----------------------------------------
+  // When `regionPaint` is active, we own pointer-down/move/up on the ground
+  // mesh: down commits the first corner, move tracks the second corner live,
+  // up locks both in and transitions to the configuring phase. We capture the
+  // pointer on pointer-down so move/up keep flowing even when the cursor
+  // strays off the ground mesh. While in `configuring` phase we no-op — the
+  // popover takes over and a misclick on the ground shouldn't reset anything.
+  // While in any region-paint phase we ALSO swallow pointer-down propagation
+  // so the camera-orbit controls don't pan the view during the drag.
+
+  const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+    const { regionPaint, snap, setRegionPaint } = useGarden.getState()
+    if (!regionPaint) return
+    if (regionPaint.phase === 'configuring') return
+    e.stopPropagation()
+    const [sx, sz] = snapXZ(e.point.x, e.point.z, snap)
+    try {
+      ;(e.target as unknown as R3FCaptureTarget).setPointerCapture(e.pointerId)
+    } catch {
+      /* no-op — capture is a robustness boost, not required */
+    }
+    if (regionPaint.phase === 'awaiting-first-corner') {
+      // First corner doubles as the initial second corner so a 0-area drag
+      // still produces a sensible rectangle if the user releases without
+      // moving (the configuring popover then lets them drag corners later
+      // via the regular translate flow on individual beds, or cancel).
+      setRegionPaint({
+        phase: 'awaiting-second-corner',
+        firstCorner: [sx, sz],
+        secondCorner: [sx, sz],
+      })
+    }
+  }
+
+  const handlePointerMove = (e: ThreeEvent<PointerEvent>) => {
+    const { regionPaint, snap, setRegionPaint } = useGarden.getState()
+    if (!regionPaint || regionPaint.phase !== 'awaiting-second-corner') return
+    e.stopPropagation()
+    const [sx, sz] = snapXZ(e.point.x, e.point.z, snap)
+    setRegionPaint({
+      phase: 'awaiting-second-corner',
+      firstCorner: regionPaint.firstCorner,
+      secondCorner: [sx, sz],
+    })
+  }
+
+  const handlePointerUp = (e: ThreeEvent<PointerEvent>) => {
+    const { regionPaint, snap, setRegionPaint } = useGarden.getState()
+    if (!regionPaint) return
+    try {
+      ;(e.target as unknown as R3FCaptureTarget).releasePointerCapture(e.pointerId)
+    } catch {
+      /* no-op */
+    }
+    if (regionPaint.phase !== 'awaiting-second-corner') return
+    e.stopPropagation()
+    const [sx, sz] = snapXZ(e.point.x, e.point.z, snap)
+    setRegionPaint({
+      phase: 'configuring',
+      firstCorner: regionPaint.firstCorner,
+      secondCorner: [sx, sz],
+      rows: 2,
+      cols: 4,
+      spacingM: 0.3,
+      bedSize: 'auto',
+    })
+  }
+
   const handleClick = async (e: ThreeEvent<MouseEvent>) => {
     const state = useGarden.getState()
     const {
@@ -186,11 +263,20 @@ export default function DemoGround() {
       selectedWallId,
       placement,
       housePlacement,
+      regionPaint,
       currentGardenId,
       snap,
       multiSelectMode,
       prefabCatalog,
     } = state
+
+    // Region paint owns the ground pointer pipeline (down/move/up). A click
+    // while painting is a no-op — we don't want to drop a stray entity into
+    // the active rectangle, nor clear selection in the middle of a drag.
+    if (regionPaint) {
+      e.stopPropagation()
+      return
+    }
 
     // ---- House placement: wall corner clicks override everything else ----
     if (housePlacement?.type === 'wall') {
@@ -323,6 +409,9 @@ export default function DemoGround() {
       position={[0, 0, 0]}
       receiveShadow
       onClick={handleClick}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
     >
       <planeGeometry args={[100, 100]} />
       <meshStandardMaterial color="#4a6b3a" roughness={0.9} metalness={0} />
