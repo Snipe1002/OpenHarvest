@@ -322,6 +322,14 @@
     const t = entity.transform || {};
     const pos = t.position || { x: 0, y: 0, z: 0 };
     const scale = t.scale || { x: 1, y: 1, z: 1 };
+    // Phase 6.1 — rotation is stored as a Babylon-convention quaternion (x, y, z, w). Older
+    // entities (or freshly-placed ones via legacy code paths) may have w === 0 or no rotation
+    // field at all; treat that as identity so the mesh doesn't render flipped or invisible.
+    const rotRaw = t.rotation || {};
+    const rot = (rotRaw.w === undefined || rotRaw.w === null)
+      ? { x: 0, y: 0, z: 0, w: 1 }
+      : { x: +rotRaw.x || 0, y: +rotRaw.y || 0, z: +rotRaw.z || 0, w: +rotRaw.w };
+    if (rot.x === 0 && rot.y === 0 && rot.z === 0 && rot.w === 0) rot.w = 1;
     const geom = entity.geometry || {};
     const kind = geom.kind || "Box";
 
@@ -391,7 +399,26 @@
       mesh.position = new BABYLON.Vector3(worldX, worldY, worldZ);
     }
     mesh.scaling = new BABYLON.Vector3(scale.x, scale.y, scale.z);
-    mesh.metadata = { entityId: entity.id, kind: entity.kind, yOffset };
+    // Phase 6.1 — apply the entity's stored rotation as a quaternion. We do this AFTER the
+    // prefab builder returns so the entity transform always wins over any rotation the
+    // builder may have left on the mesh (the house primitives don't, but future prefabs
+    // might). Babylon ignores `mesh.rotation` once `rotationQuaternion` is set, which is the
+    // behavior we want — Euler drift is a known Babylon footgun.
+    mesh.rotationQuaternion = new BABYLON.Quaternion(rot.x, rot.y, rot.z, rot.w);
+    // Phase 6.1 — preserve any builder-set flags (isWall, isShelf, isFloor) onto the canonical
+    // pickable mesh so wall/shelf snapping in app.js can find them by walking meshRegistry.
+    // The cut-away toggle already walks scene meshes for isWall, so it tolerated builder flags
+    // sitting on internal child meshes — but the new snap helpers want a one-pass-on-registry
+    // shortcut, so we promote the flag to the parent.
+    const builderMeta = mesh.metadata || {};
+    mesh.metadata = {
+      entityId: entity.id,
+      kind: entity.kind,
+      yOffset,
+      isWall: !!builderMeta.isWall,
+      isShelf: !!builderMeta.isShelf,
+      isFloor: !!builderMeta.isFloor,
+    };
     mesh.isPickable = true;
 
     if (assignDefaultMaterial) {
@@ -778,17 +805,35 @@
   }
 
   async function createPlant(p, crop) {
-    // Find the bed underneath, if any, to set ParentId — Phase 1 hierarchy enforcement is loose:
-    // we attach to whichever bed contains the click point, else null.
-    const parentId = findContainingBed(p);
-    const snapped = applySnapVec({ x: p.x, y: 0, z: p.z });
+    // Phase 6.1 — when the user taps within the screen-space footprint of a shelf top, the
+    // plant should land ON THE SHELF, not on the floor below. We do a screen-ray test against
+    // each registered shelf BEFORE falling back to bed lookup (since the shelf's top is above
+    // ground, pickGround() returned the floor point — we have to ray-test the shelf plane
+    // separately to know whether the user actually aimed at the shelf).
+    const shelf = pickShelfFromScreen?.();
+    let parentId, position;
+    if (shelf) {
+      parentId = shelf.shelfId;
+      // Snap XZ to grid, but keep Y at the shelf's top so the plant stands on the plank
+      // rather than half-buried in it. Use the screen-ray hit point (already constrained to
+      // the shelf's footprint) instead of `p` — `p` is the floor projection and would put the
+      // plant in the wrong XZ once parented.
+      const sx = applySnap(shelf.hitPoint.x);
+      const sz = applySnap(shelf.hitPoint.z);
+      position = { x: sx, y: shelf.top, z: sz };
+    } else {
+      // Find the bed underneath, if any, to set ParentId — Phase 1 hierarchy enforcement is
+      // loose: we attach to whichever bed contains the click point, else null.
+      parentId = findContainingBed(p);
+      position = applySnapVec({ x: p.x, y: 0, z: p.z });
+    }
     const body = {
       kind: "Plant",
       name: crop ? crop.commonName : "Plant",
       cropRef: crop ? crop.slug : null,
       parentId: parentId,
       transform: {
-        position: snapped,
+        position,
         rotation: { x: 0, y: 0, z: 0, w: 1 },
         scale: { x: 1, y: 1, z: 1 },
       },
@@ -797,7 +842,7 @@
     setStatus("placing plant...");
     const created = await Api.addEntity(gardenId, body);
     meshForEntity(created);
-    setStatus(`placed ${created.name}`);
+    setStatus(shelf ? `placed ${created.name} on shelf` : `placed ${created.name}`);
   }
 
   // Phase 5.2: place a prefab entity at point p. Stores Geometry as kind=Prefab + prefabRef +
@@ -817,14 +862,49 @@
     // container (no auto-parent) — placing a raised bed inside another bed almost always means
     // the user wants two adjacent beds, not a nested one.
     const isPot = prefab.category === "Pots";
-    const parentId = isPot ? findContainerAt(p, { checkY: true }) : null;
+    let parentId = isPot ? findContainerAt(p, { checkY: true }) : null;
+
+    // Phase 6.1 — wall-snap for shelves. When placing a shelf, look for a nearby wall (within
+    // ~2 ft of the tap point in XZ). If found, override position + rotation so the shelf's
+    // back face is flush with the wall surface, the shelf's long axis runs parallel to the
+    // wall, and the shelf hangs at 4 ft above floor (typical residential shelf height). The
+    // shelf parents to the wall so dragging the wall pulls its shelves along (Babylon scene
+    // graph carries the local offset through the parent's transform).
+    let position = snapped;
+    let rotation = { x: 0, y: 0, z: 0, w: 1 };
+    let snappedToWall = false;
+    if (prefabRef === "shelf-wall") {
+      const wall = findNearestWall(p, 2.0);
+      if (wall) {
+        // Push the shelf out along the wall's outward normal by half its depth + half the
+        // wall's thickness, so the back face of the shelf kisses the front face of the wall
+        // without z-fighting. Default Y = 4 ft (configurable post-placement via Position modal).
+        const shelfDepth = prefab.defaultSize.z;
+        const offset = shelfDepth / 2; // wall.closestPoint already sits ON the wall surface
+        position = {
+          x: wall.closestPoint.x + wall.normal.x * offset,
+          y: 4.0,
+          z: wall.closestPoint.z + wall.normal.z * offset,
+        };
+        // Align the shelf's long axis (local X) with the wall's long axis. Wall yaw IS the
+        // direction the wall's local X points; the shelf's local X should match. We DON'T
+        // need to add π/2 — the shelf's back face is at +/- size.z/2 along local Z, same as
+        // the wall, so identity-yaw of the shelf == identity-yaw of the wall == both extending
+        // along world X when wallYaw == 0.
+        const q = BABYLON.Quaternion.RotationAxis(BABYLON.Vector3.Up(), wall.wallYaw);
+        rotation = { x: q.x, y: q.y, z: q.z, w: q.w };
+        parentId = wall.wallId;
+        snappedToWall = true;
+      }
+    }
+
     const body = {
       kind: "Bed",
       name: prefab.name,
       parentId,
       transform: {
-        position: snapped,
-        rotation: { x: 0, y: 0, z: 0, w: 1 },
+        position,
+        rotation,
         scale: { x: 1, y: 1, z: 1 },
       },
       geometry: {
@@ -836,7 +916,7 @@
     setStatus("placing " + prefab.name + "...");
     const created = await Api.addEntity(gardenId, body);
     meshForEntity(created);
-    setStatus(`placed ${prefab.name}`);
+    setStatus(snappedToWall ? `placed ${prefab.name} on wall` : `placed ${prefab.name}`);
   }
 
   // Phase 5.4: stamp a saved template into the world. Mirrors createPrefab but pulls geometry,
@@ -1143,6 +1223,169 @@
   // Back-compat shim for the plant placement flow. Plants always sit at ground level inside a
   // bed footprint, so we don't need a Y check.
   function findContainingBed(p) { return findContainerAt(p, { checkY: false }); }
+
+  // Phase 6.1 — wall-snap helper. Walks meshRegistry for entities flagged as walls (set by the
+  // wall-segment / door / window prefab builders via metadata.isWall), computes the closest
+  // point on each wall's top-down rectangle to the tap point in XZ, and returns the nearest
+  // hit within `maxDist` (feet). The returned record carries everything the shelf-placement
+  // code needs to flush its back face against the wall and rotate it parallel:
+  //   { wallId, mesh, closestPoint:{x,z}, normal:{x,z}, wallYaw, length, height }
+  // wallYaw is the wall's current Y-axis rotation in radians (so a rotated wall still snaps
+  // shelves correctly). Walls are boxes whose long axis lies along local-X — when yaw === 0
+  // the wall extends along world X and its normals point ±Z; we project the tap point into
+  // wall-local coordinates, clamp to the wall's length, and project back to world space.
+  function findNearestWall(point, maxDist = 2.0) {
+    let best = null;
+    let bestDist = maxDist;
+    for (const [, rec] of meshRegistry) {
+      if (!rec.entity || !rec.mesh || rec.mesh.isDisposed?.()) continue;
+      // We accept either an explicit metadata.isWall flag (set by the prefab builder + carried
+      // through meshForEntity) or the wall-bearing prefab refs as a belt-and-braces fallback
+      // for entities saved before the metadata-promotion patch landed.
+      const meta = rec.mesh.metadata || {};
+      const ref = rec.entity.geometry?.prefabRef;
+      const isWall = meta.isWall === true
+        || ref === "wall-segment" || ref === "door" || ref === "window";
+      if (!isWall) continue;
+      const g = rec.entity.geometry || {};
+      const size = g.size || { x: 8, y: 8, z: 0.5 };
+      const t = rec.entity.transform || {};
+      const cx = t.position?.x || 0;
+      const cz = t.position?.z || 0;
+      const yaw = quaternionToYaw(t.rotation || { x: 0, y: 0, z: 0, w: 1 });
+      // Transform the tap point into the wall's local frame (rotate by -yaw around the wall
+      // centre). In local coords the wall is axis-aligned: extends ±size.x/2 along X, ±size.z/2
+      // along Z. Closest point clamps to that rectangle; the wall's normals are world ±Z in
+      // local, transformed back by +yaw.
+      const dx = point.x - cx;
+      const dz = point.z - cz;
+      const cosY = Math.cos(-yaw), sinY = Math.sin(-yaw);
+      const lx = dx * cosY - dz * sinY;
+      const lz = dx * sinY + dz * cosY;
+      const halfW = size.x / 2;
+      const halfD = size.z / 2;
+      const clx = Math.max(-halfW, Math.min(halfW, lx));
+      // The "front" face of the wall is the one closest to the tap. Pick the side based on
+      // whichever local-Z half the tap is on — this keeps shelves on the side of the wall
+      // the user tapped from, instead of always snapping to the same face.
+      const sideZ = lz >= 0 ? halfD : -halfD;
+      const normalLocalZ = lz >= 0 ? 1 : -1;
+      // Distance in the local frame is the perpendicular distance from the tap to the
+      // chosen face (|lz - sideZ|), provided the tap's local-X is within the wall length.
+      // If the tap is past the ends of the wall, fall back to a Euclidean distance to the
+      // clamped corner so we don't snap to a wall the user clearly aimed past.
+      const xPenalty = Math.max(0, Math.abs(lx) - halfW);
+      const zPenalty = Math.abs(lz - sideZ);
+      const localDist = Math.hypot(xPenalty, zPenalty);
+      if (localDist > bestDist) continue;
+      // Closest point on the wall's surface, in local then world coords.
+      const cw_lx = clx;
+      const cw_lz = sideZ;
+      const cosBack = Math.cos(yaw), sinBack = Math.sin(yaw);
+      const cwx = cx + cw_lx * cosBack - cw_lz * sinBack;
+      const cwz = cz + cw_lx * sinBack + cw_lz * cosBack;
+      // Outward normal in world coords (rotate local (0, normalLocalZ) by +yaw).
+      const nx = -normalLocalZ * sinBack;
+      const nz = normalLocalZ * cosBack;
+      bestDist = localDist;
+      best = {
+        wallId: rec.entity.id,
+        mesh: rec.mesh,
+        closestPoint: { x: cwx, z: cwz },
+        normal: { x: nx, z: nz },
+        wallYaw: yaw,
+        length: size.x,
+        height: size.y,
+        thickness: size.z,
+      };
+    }
+    return best;
+  }
+
+  // Phase 6.1 — shelf-snap helper. Returns the entity id of the shelf whose top surface is
+  // within `maxDistY` of the tap's Y AND whose XZ footprint contains the tap (in the shelf's
+  // local frame, accounting for rotation). When found, the caller can parent the new entity
+  // onto the shelf and place it at shelf.position.y + size.y/2.
+  function findShelfAt(point, maxDistY = 0.3) {
+    for (const [, rec] of meshRegistry) {
+      if (!rec.entity || !rec.mesh || rec.mesh.isDisposed?.()) continue;
+      const meta = rec.mesh.metadata || {};
+      const ref = rec.entity.geometry?.prefabRef;
+      const isShelf = meta.isShelf === true || ref === "shelf-wall";
+      if (!isShelf) continue;
+      const g = rec.entity.geometry || {};
+      const size = g.size || { x: 3, y: 0.1, z: 1 };
+      const t = rec.entity.transform || {};
+      const cx = t.position?.x || 0;
+      const cy = t.position?.y || 0;
+      const cz = t.position?.z || 0;
+      const top = cy + size.y;
+      // The point's Y must be near the top of the shelf. v1 tolerance is a generous 0.3 ft so
+      // a slightly-off ground tap (where pickGround returned y=0 but the shelf is at 4 ft) can
+      // still land — but this also means a ground-level tap NEVER matches a shelf at 4 ft, so
+      // callers that want shelf-snapping have to provide a Y-bearing point (e.g. the camera
+      // ray's intersection with the shelf's plane). For v1 we keep it simple: callers that
+      // can't supply a real Y skip this and fall through to bed-snapping.
+      if (Math.abs((point.y || 0) - top) > maxDistY) continue;
+      const yaw = quaternionToYaw(t.rotation || { x: 0, y: 0, z: 0, w: 1 });
+      const dx = point.x - cx;
+      const dz = point.z - cz;
+      const cosY = Math.cos(-yaw), sinY = Math.sin(-yaw);
+      const lx = dx * cosY - dz * sinY;
+      const lz = dx * sinY + dz * cosY;
+      if (Math.abs(lx) <= size.x / 2 && Math.abs(lz) <= size.z / 2) {
+        return { shelfId: rec.entity.id, top, mesh: rec.mesh, size, yaw };
+      }
+    }
+    return null;
+  }
+
+  // Phase 6.1 — alternate shelf finder that uses a SCREEN ray to test each shelf's top plane
+  // directly. The pickGround() helper only returns a point on the floor (y=0), so a shelf at
+  // 4 ft never matches via findShelfAt's Y tolerance. This walks the registry and ray-tests the
+  // shelf top plane at its actual world height; first hit wins. Returns the same record as
+  // findShelfAt or null. Caller passes the same scene/camera ray used for the placement tap.
+  function pickShelfFromScreen() {
+    const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, BABYLON.Matrix.Identity(), camera);
+    let best = null;
+    let bestT = Infinity;
+    for (const [, rec] of meshRegistry) {
+      if (!rec.entity || !rec.mesh || rec.mesh.isDisposed?.()) continue;
+      const meta = rec.mesh.metadata || {};
+      const ref = rec.entity.geometry?.prefabRef;
+      const isShelf = meta.isShelf === true || ref === "shelf-wall";
+      if (!isShelf) continue;
+      const g = rec.entity.geometry || {};
+      const size = g.size || { x: 3, y: 0.1, z: 1 };
+      const t = rec.entity.transform || {};
+      const cx = t.position?.x || 0;
+      const cy = t.position?.y || 0;
+      const cz = t.position?.z || 0;
+      const top = cy + size.y;
+      // Solve for the ray's t at y = top: ray.origin.y + t * ray.direction.y = top
+      if (Math.abs(ray.direction.y) < 1e-6) continue;
+      const tHit = (top - ray.origin.y) / ray.direction.y;
+      if (tHit < 0 || tHit > bestT) continue;
+      const hx = ray.origin.x + tHit * ray.direction.x;
+      const hz = ray.origin.z + tHit * ray.direction.z;
+      const yaw = quaternionToYaw(t.rotation || { x: 0, y: 0, z: 0, w: 1 });
+      const dx = hx - cx, dz = hz - cz;
+      const cosY = Math.cos(-yaw), sinY = Math.sin(-yaw);
+      const lx = dx * cosY - dz * sinY;
+      const lz = dx * sinY + dz * cosY;
+      if (Math.abs(lx) > size.x / 2 || Math.abs(lz) > size.z / 2) continue;
+      bestT = tHit;
+      best = {
+        shelfId: rec.entity.id,
+        top,
+        mesh: rec.mesh,
+        size,
+        yaw,
+        hitPoint: { x: hx, y: top, z: hz },
+      };
+    }
+    return best;
+  }
 
   // ---------- plant autocomplete modal ----------
   let activeModal = null;
@@ -1600,7 +1843,9 @@
         const updated = await Api.updateEntity(gardenId, eid, {
           transform: {
             position: newPos,
-            rotation: { x: 0, y: 0, z: 0, w: 1 },
+            // Phase 6.1 — preserve the entity's rotation across a move so a user-rotated
+            // shelf or wall doesn't snap back to axis-aligned the moment they drag it.
+            rotation: rec.entity.transform?.rotation || { x: 0, y: 0, z: 0, w: 1 },
             scale: rec.entity.transform?.scale || { x: 1, y: 1, z: 1 },
           },
         });
@@ -1623,7 +1868,8 @@
             const childUpdated = await Api.updateEntity(gardenId, child.entity.id, {
               transform: {
                 position: newChildPos,
-                rotation: { x: 0, y: 0, z: 0, w: 1 },
+                // Phase 6.1 — preserve child's own rotation across the parent's move.
+                rotation: child.entity.transform?.rotation || { x: 0, y: 0, z: 0, w: 1 },
                 scale: child.entity.transform?.scale || { x: 1, y: 1, z: 1 },
               },
             });
@@ -2138,6 +2384,12 @@
     resizeBtn.title = canResize ? "Resize" : "Plants don't have a size editor";
     if (canResize) resizeBtn.addEventListener("click", () => openResizeModal(eid));
     fresh.querySelector('[data-act="move"]').addEventListener("click", () => startMove(eid));
+    // Phase 6.1 — rotate 90° about Y on every tap. We pull the current Y rotation out of the
+    // stored quaternion (assuming pure-Y rotation, which is what the toolbar produces), bump
+    // by π/2, rebuild the quaternion, and PATCH. The mesh re-renders via the SignalR upsert
+    // pipeline, so we don't need to mutate rec.mesh.rotationQuaternion ourselves.
+    const rotBtn = fresh.querySelector('[data-act="rotate"]');
+    if (rotBtn) rotBtn.addEventListener("click", () => rotateEntityById(eid));
     // Phase 5.2.2 (B5) — Style/color picker. Available for any entity that renders a tintable
     // mesh, which today means everything except plants (whose green color is semantic). We let
     // the modal handle the no-op gracefully though, so the button just opens it for plants too.
@@ -2165,6 +2417,49 @@
     tb.querySelector(".tb-close").onclick = clearSelection;
   }
 
+  // Phase 6.1 — rotate the entity 90° about Y. quaternionToYaw recovers the current Y rotation
+  // from the stored quaternion; we add π/2 (modulo 2π) and rebuild a fresh quaternion. Pure-Y
+  // rotations are the only kind the toolbar ever produces, so we don't have to worry about
+  // pitch/roll bleed; if a future tool ever stores a tilted rotation, this will lose those
+  // axes (which is fine — pure-Y is intentional for "stick to wall" and "rotate the floor").
+  function quaternionToYaw(q) {
+    if (!q) return 0;
+    // Yaw extraction for a pure-Y or roughly-Y quaternion: yaw = 2 * atan2(y, w). For a true
+    // arbitrary-rotation quaternion the more general formula is atan2(2(wy+xz), 1-2(y²+x²)),
+    // but our quaternions only ever carry Y rotation, so the simpler form is exact and avoids
+    // the wraparound discontinuity at ±π.
+    const y = +q.y || 0, w = +q.w || 1;
+    return 2 * Math.atan2(y, w);
+  }
+  async function rotateEntityById(eid) {
+    const rec = meshRegistry.get(eid);
+    if (!rec) return;
+    const entity = rec.entity;
+    const currentRot = entity.transform?.rotation || { x: 0, y: 0, z: 0, w: 1 };
+    const currentYaw = quaternionToYaw(currentRot);
+    const TAU = Math.PI * 2;
+    let newYaw = (currentYaw + Math.PI / 2) % TAU;
+    if (newYaw < 0) newYaw += TAU;
+    const q = BABYLON.Quaternion.RotationAxis(BABYLON.Vector3.Up(), newYaw);
+    const newRot = { x: q.x, y: q.y, z: q.z, w: q.w };
+    try {
+      const updated = await Api.updateEntity(gardenId, eid, {
+        transform: {
+          position: entity.transform?.position || { x: 0, y: 0, z: 0 },
+          rotation: newRot,
+          scale: entity.transform?.scale || { x: 1, y: 1, z: 1 },
+        },
+      });
+      // Mesh is rebuilt by the SignalR upsert (or, if the broadcast is slow, we rebuild here
+      // for instant feedback). meshForEntity is idempotent, so the SignalR repeat is a no-op.
+      disposeEntity(eid);
+      meshForEntity(updated);
+      if (selectedEntityId === eid) selectEntity(eid);
+      const deg = Math.round((newYaw * 180) / Math.PI);
+      setStatus(`rotated to ${deg}°`);
+    } catch (e) { console.error(e); setStatus("rotate failed"); }
+  }
+
   // Duplicate the entity with a +1 ft X offset (plus snap if active). Pulled out of the old
   // renderEditPanel so both the toolbar and any future caller can share the same pipeline.
   async function duplicateEntityById(eid) {
@@ -2181,7 +2476,9 @@
       parentId: entity.parentId,
       transform: {
         position: newPos,
-        rotation: { x: 0, y: 0, z: 0, w: 1 },
+        // Phase 6.1 — carry the source's rotation through the duplicate. Resetting to identity
+        // here was a Phase-5 oversight that became visible once we shipped a rotation handle.
+        rotation: entity.transform?.rotation || { x: 0, y: 0, z: 0, w: 1 },
         scale: entity.transform?.scale || { x: 1, y: 1, z: 1 },
       },
       geometry: entity.geometry,
@@ -2250,7 +2547,8 @@
         const updated = await Api.updateEntity(gardenId, eid, {
           transform: {
             position: newPos,
-            rotation: { x: 0, y: 0, z: 0, w: 1 },
+            // Phase 6.1 — preserve rotation. Position modal only edits XYZ.
+            rotation: entity.transform?.rotation || { x: 0, y: 0, z: 0, w: 1 },
             scale: entity.transform?.scale || { x: 1, y: 1, z: 1 },
           },
         });

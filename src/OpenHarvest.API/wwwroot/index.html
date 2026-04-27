@@ -629,6 +629,10 @@
       <button data-act="diagnose" title="Diagnose">🔍</button>
       <button data-act="resize" title="Resize">📐</button>
       <button data-act="move" title="Move">🚚</button>
+      <!-- Phase 6.1 — rotate. Each tap rotates the entity 90° about Y, cycling 0/90/180/270.
+           Stored as a quaternion in transform.rotation, so the server PATCH path stays the
+           same; the toolbar just translates "tap rotate" into "compute next quaternion + PATCH". -->
+      <button data-act="rotate" title="Rotate 90°">🔄</button>
       <!-- Phase 5.2.2 (B5): per-instance material color. Opens a swatch + custom-hex modal;
            the chosen color is stored in entity.extensions.color and read by the prefab
            builder when it next renders the mesh. -->
@@ -655,7 +659,7 @@
   <!-- Phase 5.2.2: cache-bust suffix bumps with each UX-polish revision so iPhone Safari
        (which aggressively caches JS) picks up the new build without a full app reset. Bump
        the number whenever app.js, prefabs.js, or this file changes. -->
-  <script src="lib/prefabs.js?v=600"></script>
-  <script src="app.js?v=600"></script>
+  <script src="lib/prefabs.js?v=601"></script>
+  <script src="app.js?v=601"></script>
 </body>
 </html>
