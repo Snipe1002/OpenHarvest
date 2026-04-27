@@ -4,8 +4,8 @@
  * movement and auto-hides when nothing is selected.
  *
  * Layout: a small dark pill with type label + icon-only buttons (rotate,
- * delete, expand). Expand toggles a detail panel below the pill with
- * numeric position / size inputs.
+ * translate, duplicate, delete, expand, close). Expand toggles a detail
+ * panel below the pill with numeric position + size inputs.
  *
  * Anchor: just above the entity's top (position.y + size.y + 0.3m) so the
  * card doesn't overlap the geometry. Falls back to position.y + 1.5m when
@@ -91,7 +91,7 @@ const ROW_STYLE: React.CSSProperties = {
 }
 
 const TINY_LABEL: React.CSSProperties = {
-  width: 14,
+  width: 18,
   color: '#888',
   fontSize: 10,
   textTransform: 'uppercase',
@@ -190,24 +190,29 @@ function NumberField({ label, value, onCommit, step = 0.1, min }: NumberFieldPro
 }
 
 export default function InspectorCard() {
-  const entity = useGarden((s) => {
-    const id = s.selectedEntityId
-    return id ? s.entities[id] ?? null : null
-  })
+  // We intentionally subscribe to the id only and look the entity up from the
+  // entities dict in a separate selector. This way a re-render caused by an
+  // entity-content change doesn't churn the `entity` reference identity for
+  // useEffect deps that key off `entity.id`.
+  const selectedId = useGarden((s) => s.selectedEntityId)
+  const entity = useGarden((s) => (selectedId ? s.entities[selectedId] ?? null : null))
   const gardenId = useGarden((s) => s.currentGardenId)
   const setToast = useGarden((s) => s.setToast)
   const selectEntity = useGarden((s) => s.selectEntity)
   const addOrUpdateEntity = useGarden((s) => s.addOrUpdateEntity)
   const removeEntity = useGarden((s) => s.removeEntity)
+  const setTranslateMode = useGarden((s) => s.setTranslateMode)
 
   const [expanded, setExpanded] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
 
-  // Reset transient UI state on selection change.
+  // Reset transient UI state on selection change. Keying off the id (not the
+  // entity object) means a streaming entity update from SignalR doesn't
+  // collapse the expanded panel.
   useEffect(() => {
     setConfirmingDelete(false)
     setExpanded(false)
-  }, [entity?.id])
+  }, [selectedId])
 
   if (!entity || !gardenId) return null
 
@@ -266,6 +271,10 @@ export default function InspectorCard() {
     void patch({ ...entity, transform: nextTransform }, { transform: nextTransform })
   }
 
+  const onTranslate = () => {
+    setTranslateMode(entity.id)
+  }
+
   const onDuplicate = async () => {
     // Build a CreateEntityRequest matching the source entity's shape, with
     // the position offset by 0.5m on X so the duplicate doesn't z-fight.
@@ -322,7 +331,9 @@ export default function InspectorCard() {
     }
   }
 
-  const renderSizeRow = () => {
+  // Compute the size row JSX once, so it doesn't get re-invoked twice in the
+  // conditional + render pass below.
+  const sizeRow = (() => {
     const g = entity.geometry
     if (g.kind === 'Box') {
       const s = g.size ?? { x: 1, y: 1, z: 1 }
@@ -353,25 +364,42 @@ export default function InspectorCard() {
       )
     }
     return null
-  }
+  })()
 
   return (
     <Html
       position={[ax, ay + yOffset, az]}
       center
-      distanceFactor={undefined}
+      // drei's wrapper has its own root; we keep it pointer-event-transparent
+      // and rely on per-pill pointerEvents:auto so empty-space clicks fall
+      // through to the canvas.
       style={{ pointerEvents: 'none' }}
-      // Stop drei from styling its wrapper; we set pointerEvents on children.
     >
       <div
-        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}
+        // The flex column owns its own pointer-events so all descendants
+        // (pill + detail panel) reliably receive clicks. Without this, the
+        // `pointerEvents:'none'` from the parent <Html> can mask click
+        // hit-testing on touch devices in particular.
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 4,
+          pointerEvents: 'auto',
+        }}
+        // Stop pointerdown from reaching the canvas (camera orbit) AND stop
+        // click from reaching the canvas (deselect on empty-ground click).
         onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
       >
         {/* Action row: type label + buttons */}
         <div style={PILL_STYLE}>
           <span style={{ fontSize: 11, padding: '0 4px', color: '#bbb' }}>{typeLabel(entity)}</span>
           <button style={ICON_BUTTON} onClick={onRotate} title="Rotate 90°">
             ⟳
+          </button>
+          <button style={ICON_BUTTON} onClick={onTranslate} title="Translate (drag to move)">
+            ⇄
           </button>
           <button style={ICON_BUTTON} onClick={onDuplicate} title="Duplicate">
             📋
@@ -400,21 +428,22 @@ export default function InspectorCard() {
           </button>
         </div>
 
-        {/* Position row — always visible. This is the translate UX. */}
-        <div style={PILL_STYLE}>
-          <span style={TINY_LABEL}>Pos</span>
-          <NumberField label="X" value={entity.transform.position.x} onCommit={(n) => updatePosition('x', n)} />
-          <NumberField label="Y" value={entity.transform.position.y} onCommit={(n) => updatePosition('y', n)} />
-          <NumberField label="Z" value={entity.transform.position.z} onCommit={(n) => updatePosition('z', n)} />
-        </div>
-
-        {/* Detail row — collapsible (size only — position is above). */}
-        {expanded && renderSizeRow() && (
+        {/* Detail panel — collapsible. Shows BOTH position and size when
+            expanded. Position is no longer permanently visible above the pill. */}
+        {expanded && (
           <div style={DETAIL_STYLE}>
             <div style={ROW_STYLE}>
-              <span style={TINY_LABEL}>Size</span>
-              {renderSizeRow()}
+              <span style={TINY_LABEL}>Pos</span>
+              <NumberField label="X" value={entity.transform.position.x} onCommit={(n) => updatePosition('x', n)} />
+              <NumberField label="Y" value={entity.transform.position.y} onCommit={(n) => updatePosition('y', n)} />
+              <NumberField label="Z" value={entity.transform.position.z} onCommit={(n) => updatePosition('z', n)} />
             </div>
+            {sizeRow && (
+              <div style={ROW_STYLE}>
+                <span style={TINY_LABEL}>Size</span>
+                {sizeRow}
+              </div>
+            )}
           </div>
         )}
       </div>

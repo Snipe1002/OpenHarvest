@@ -20,6 +20,7 @@ import { Outlines } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import type { GardenEntity, Quaternion } from '../api/types'
 import { useGarden } from '../store/garden'
+import { useTranslateDrag } from './useTranslateDrag'
 
 interface DemoBedProps {
   entity: GardenEntity
@@ -42,6 +43,8 @@ function quaternionToEuler(q: Quaternion): [number, number, number] {
 export default function DemoBed({ entity }: DemoBedProps) {
   const selectEntity = useGarden((s) => s.selectEntity)
   const isSelected = useGarden((s) => s.selectedEntityId === entity.id)
+  const isTranslating = useGarden((s) => s.translateModeId === entity.id)
+  const drag = useTranslateDrag(entity)
 
   const [w, h, l] = resolveSize(entity)
   const t = 0.05 // plank thickness
@@ -60,7 +63,12 @@ export default function DemoBed({ entity }: DemoBedProps) {
     ],
   )
 
-  const handleSelect = (e: ThreeEvent<PointerEvent>) => {
+  const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+    if (isTranslating) {
+      // Drag takes over — entity is already selected, no selection re-fire.
+      drag.onPointerDown(e)
+      return
+    }
     e.stopPropagation()
     selectEntity(entity.id)
   }
@@ -69,7 +77,13 @@ export default function DemoBed({ entity }: DemoBedProps) {
   // bed's mid-height). Rotation on the group then rotates the whole bed
   // together.
   return (
-    <group position={groupPosition} rotation={groupRotation} onPointerDown={handleSelect}>
+    <group
+      position={groupPosition}
+      rotation={groupRotation}
+      onPointerDown={handlePointerDown}
+      onPointerMove={isTranslating ? drag.onPointerMove : undefined}
+      onPointerUp={isTranslating ? drag.onPointerUp : undefined}
+    >
       {/* +X plank */}
       <mesh position={[w / 2 - t / 2, 0, 0]} castShadow receiveShadow>
         <boxGeometry args={[t, h, l]} />

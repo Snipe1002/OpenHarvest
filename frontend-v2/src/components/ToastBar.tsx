@@ -24,7 +24,7 @@ export default function ToastBar() {
       style={{
         position: 'fixed',
         right: 16,
-        top: 56, // sit below the Clear House button
+        top: 16,
         zIndex: 12,
         padding: '8px 12px',
         background: '#3a1a1a',

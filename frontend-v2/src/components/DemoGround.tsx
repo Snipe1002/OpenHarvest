@@ -24,6 +24,7 @@ import type {
 } from '../api/types'
 import type { PlacementType } from '../store/garden'
 import { useGarden } from '../store/garden'
+import { createWallBetween, snapXZ } from './HouseToolbar'
 
 const IDENTITY_TRANSFORM: Transform = {
   position: { x: 0, y: 0, z: 0 },
@@ -86,7 +87,45 @@ function buildCreateRequest(
 
 export default function DemoGround() {
   const handleClick = async (e: ThreeEvent<MouseEvent>) => {
-    const { selectedEntityId, placement, currentGardenId } = useGarden.getState()
+    const state = useGarden.getState()
+    const {
+      selectedEntityId,
+      selectedWallId,
+      placement,
+      housePlacement,
+      currentGardenId,
+      snap,
+    } = state
+
+    // ---- House placement: wall corner clicks override everything else ----
+    if (housePlacement?.type === 'wall') {
+      e.stopPropagation()
+      const [sx, sz] = snapXZ(e.point.x, e.point.z, snap)
+      if (!housePlacement.pendingFirstCorner) {
+        // First corner: stash and wait for the second click.
+        useGarden.getState().setHousePlacement({
+          type: 'wall',
+          pendingFirstCorner: [sx, sz],
+        })
+        return
+      }
+      // Second corner: build the wall and exit placement.
+      const wallId = createWallBetween(housePlacement.pendingFirstCorner, [sx, sz])
+      if (!wallId) {
+        useGarden.getState().setToast('No level found — cannot create wall')
+      }
+      useGarden.getState().setHousePlacement(null)
+      return
+    }
+
+    // Door / window placement is handled by the wall-click subscriber in
+    // App.tsx — a click on the ground while in those modes does nothing
+    // except cancel garden placement clutter. Don't fall through to garden
+    // placement here, or a misclick would create a stray entity.
+    if (housePlacement?.type === 'door' || housePlacement?.type === 'window') {
+      e.stopPropagation()
+      return
+    }
 
     if (placement) {
       // Stop propagation so the camera control / pointer-missed don't react.
@@ -119,9 +158,12 @@ export default function DemoGround() {
       return
     }
 
-    // No placement — empty ground click clears selection.
+    // No placement — empty ground click clears selection (entity OR wall).
     if (selectedEntityId) {
       useGarden.getState().selectEntity(null)
+    }
+    if (selectedWallId) {
+      useGarden.getState().selectWall(null)
     }
   }
 

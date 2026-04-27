@@ -23,6 +23,7 @@ import DemoBed from './DemoBed'
 import DemoPlant from './DemoPlant'
 import type { GardenEntity, Vector3 } from '../api/types'
 import { useGarden } from '../store/garden'
+import { useTranslateDrag } from './useTranslateDrag'
 
 const BED_PREFABS = new Set(['raised-bed-wood', 'square-planter'])
 const PLANT_PREFABS = new Set(['tomato-cage'])
@@ -92,14 +93,25 @@ export default function EntityRenderer({ entity }: { entity: GardenEntity }) {
 function PrefabPlaceholder({ entity }: { entity: GardenEntity }) {
   const selectEntity = useGarden((s) => s.selectEntity)
   const isSelected = useGarden((s) => s.selectedEntityId === entity.id)
+  const isTranslating = useGarden((s) => s.translateModeId === entity.id)
+  const drag = useTranslateDrag(entity)
   const { x, y, z } = entity.transform.position
   const slug = entity.geometry.prefabRef ?? entity.kind
-  const handleSelect = (e: ThreeEvent<PointerEvent>) => {
+  const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+    if (isTranslating) {
+      drag.onPointerDown(e)
+      return
+    }
     e.stopPropagation()
     selectEntity(entity.id)
   }
   return (
-    <group position={[x, y, z]} onPointerDown={handleSelect}>
+    <group
+      position={[x, y, z]}
+      onPointerDown={handlePointerDown}
+      onPointerMove={isTranslating ? drag.onPointerMove : undefined}
+      onPointerUp={isTranslating ? drag.onPointerUp : undefined}
+    >
       <mesh position={[0, 0.25, 0]} castShadow receiveShadow>
         <boxGeometry args={[0.5, 0.5, 0.5]} />
         <meshStandardMaterial color="#a08c5e" roughness={0.6} metalness={0} />
@@ -121,15 +133,26 @@ function PrefabPlaceholder({ entity }: { entity: GardenEntity }) {
 function UnknownDebugCube({ entity }: { entity: GardenEntity }) {
   const selectEntity = useGarden((s) => s.selectEntity)
   const isSelected = useGarden((s) => s.selectedEntityId === entity.id)
+  const isTranslating = useGarden((s) => s.translateModeId === entity.id)
+  const drag = useTranslateDrag(entity)
   const { x, y, z } = entity.transform.position
   // Show whatever is most descriptive — prefer prefab slug, fall back to kind.
   const label = entity.geometry.prefabRef ?? `${entity.kind}:${entity.geometry.kind}`
-  const handleSelect = (e: ThreeEvent<PointerEvent>) => {
+  const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+    if (isTranslating) {
+      drag.onPointerDown(e)
+      return
+    }
     e.stopPropagation()
     selectEntity(entity.id)
   }
   return (
-    <group position={[x, y, z]} onPointerDown={handleSelect}>
+    <group
+      position={[x, y, z]}
+      onPointerDown={handlePointerDown}
+      onPointerMove={isTranslating ? drag.onPointerMove : undefined}
+      onPointerUp={isTranslating ? drag.onPointerUp : undefined}
+    >
       <mesh position={[0, 0.15, 0]} castShadow>
         <boxGeometry args={[0.3, 0.3, 0.3]} />
         <meshStandardMaterial color="#ff00ff" roughness={0.5} metalness={0} />
