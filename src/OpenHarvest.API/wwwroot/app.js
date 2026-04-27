@@ -29,6 +29,19 @@
       if (!res.ok) throw new Error("createGarden failed: " + res.status);
       return res.json();
     },
+    async getGarden(gid) {
+      const res = await fetch(`${BASE}api/v1/gardens/${gid}`);
+      if (!res.ok) return null;
+      return res.json();
+    },
+    async updateGarden(gid, body) {
+      const res = await fetch(`${BASE}api/v1/gardens/${gid}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) throw new Error("updateGarden failed: " + res.status);
+      return res.json();
+    },
     async getEntities(gid) {
       const res = await fetch(`${BASE}api/v1/gardens/${gid}/entities`);
       if (!res.ok) throw new Error("getEntities failed: " + res.status);
@@ -158,8 +171,19 @@
   camera.wheelDeltaPercentage = 0.02;
   camera.panningSensibility = 50;
 
-  const light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
-  light.intensity = 0.95;
+  // Phase 5.1: split lighting into a directional "sun" (animated by SunCalc against
+  // wall clock + garden lat/lng) and a low-intensity hemispheric "sky" fill so things
+  // never go pitch black at night. The sun's direction and intensity are updated by
+  // updateSun(); sensible defaults below cover the first frame before the first call.
+  const sun = new BABYLON.DirectionalLight("sun", new BABYLON.Vector3(-0.5, -1, 0.3), scene);
+  sun.intensity = 0.9;
+  sun.diffuse = new BABYLON.Color3(1.0, 0.96, 0.86);
+  sun.specular = new BABYLON.Color3(1.0, 0.96, 0.86);
+
+  const sky = new BABYLON.HemisphericLight("sky", new BABYLON.Vector3(0, 1, 0), scene);
+  sky.intensity = 0.30;
+  sky.diffuse = new BABYLON.Color3(0.65, 0.78, 1.0);
+  sky.groundColor = new BABYLON.Color3(0.20, 0.22, 0.18);
 
   const ground = BABYLON.MeshBuilder.CreateGround("ground", { width: 60, height: 60 }, scene);
   const groundMat = new BABYLON.GridMaterial("groundMat", scene);
@@ -1421,6 +1445,227 @@
     } catch (e) { /* silent — nudges are best-effort */ }
   }
 
+  // ---------- Phase 5.1: spatial awareness (compass + sun + time) ----------
+  // Convention: world +Z = scene-north, +X = east, +Y = up. The compass overlay
+  // rotates so its "N" stays pointing toward scene-north regardless of camera
+  // alpha. The directional sun is recomputed from the garden lat/lng + wall clock
+  // every 60s using SunCalc; intensity/colour are eased through a day/night curve.
+
+  // Default location if the user hasn't set one yet — 40°N / 75°W (≈ Philadelphia).
+  // Picked so the sun has *something* to compute on first load. The settings modal
+  // shows a warning prompting the user to set their real coordinates.
+  const DEFAULT_LAT = 40.0;
+  const DEFAULT_LNG = -75.0;
+  let gardenLat = DEFAULT_LAT;
+  let gardenLng = DEFAULT_LNG;
+  let gardenName = "My Garden";
+  let gardenLocationSet = false; // true once we've persisted real lat/lng
+
+  // Compass: rotate the SVG-style overlay every frame so N stays scene-north.
+  // ArcRotateCamera.alpha = -π/2 looks down +Z; rotating the badge by (alpha + π/2)
+  // CCW (i.e. negative CSS rotation) keeps N pointing up onscreen when the camera
+  // looks north, swings to the side when the camera spins, etc.
+  const compassEl = document.getElementById("compass");
+  scene.onBeforeRenderObservable.add(() => {
+    if (!compassEl) return;
+    // Camera alpha increases CCW around +Y. CSS rotate is CW. The +90° offset
+    // accounts for our default camera alpha of -π/2 (looking down +Z = north).
+    const deg = (camera.alpha + Math.PI / 2) * (180 / Math.PI);
+    compassEl.style.transform = `rotate(${deg}deg)`;
+  });
+
+  // Sun phase pill — derived from SunCalc.getTimes().
+  const sunPhaseEl = document.getElementById("sunPhase");
+  function setSunPhase(label) {
+    if (!sunPhaseEl) return;
+    if (!label) { sunPhaseEl.classList.add("hidden"); return; }
+    sunPhaseEl.textContent = label;
+    sunPhaseEl.classList.remove("hidden");
+  }
+
+  // SunCalc azimuth: radians from south, clockwise (south=0, west=π/2, north=±π).
+  // Babylon DirectionalLight.direction is the direction that *light rays travel*,
+  // i.e. the vector from sun → ground. We compute the sun's position relative to
+  // the observer, then negate to get the ray direction.
+  function updateSun() {
+    if (typeof SunCalc === "undefined") return;
+    const now = new Date();
+    const pos = SunCalc.getPosition(now, gardenLat, gardenLng);
+    const a = pos.azimuth;     // radians, south=0, +CW
+    const e = pos.altitude;    // radians, 0=horizon, π/2=zenith
+
+    // SunCalc azimuth a is measured clockwise from south (south=0, west=+π/2,
+    // north=±π, east=-π/2). The unit vector from observer TO sun, in our world
+    // frame (+X=east, +Y=up, +Z=north), is therefore:
+    //   sun_x = -sin(a) * cos(e)      // west has sin(a)>0, but west = -X, so sign flip
+    //   sun_y =  sin(e)
+    //   sun_z = -cos(a) * cos(e)      // south has cos(a)>0, but south = -Z, so sign flip
+    // The light's RAY direction (sun → ground) is the negation:
+    const cosE = Math.cos(e);
+    const dirX =  Math.sin(a) * cosE;   // east+ when ray heads east
+    const dirY = -Math.sin(e);          // down (negative Y) while sun is above horizon
+    const dirZ =  Math.cos(a) * cosE;   // +Z (north) when sun is south of us — checks out:
+                                         // at solar noon a=0, dirZ=+cos(e) → light shines north.
+    sun.direction = new BABYLON.Vector3(dirX, dirY, dirZ).normalize();
+
+    // Day/night curve. Above horizon: ramp 0.30 → 1.0 from horizon to zenith.
+    // Below horizon: a low cool ambient so things stay legible at night.
+    if (e > 0) {
+      const t = Math.min(1, e / (Math.PI / 2));         // 0 at horizon, 1 at zenith
+      sun.intensity = 0.30 + 0.70 * t;
+      // Warm colour near horizon (sunrise/sunset), cooler near zenith.
+      const warm = 1.0 - t;                              // 1 at horizon, 0 at zenith
+      sun.diffuse = new BABYLON.Color3(
+        1.0,
+        0.78 + 0.18 * t,                                 // 0.78 → 0.96
+        0.55 + 0.31 * t                                  // 0.55 → 0.86
+      );
+      sun.specular = sun.diffuse;
+      sky.intensity = 0.25 + 0.20 * t;                   // 0.25 → 0.45
+      sky.diffuse = new BABYLON.Color3(
+        0.55 + 0.10 * t,
+        0.70 + 0.08 * t,
+        0.95
+      );
+      // Tint background slightly with daylight so the canvas isn't a black void.
+      const bgT = 0.15 * t;
+      scene.clearColor = new BABYLON.Color4(0.06 + bgT, 0.07 + bgT, 0.08 + bgT * 1.2, 1);
+      void warm; // (warm reserved for future fog tinting)
+    } else {
+      sun.intensity = 0.05;
+      sun.diffuse = new BABYLON.Color3(0.30, 0.40, 0.65);
+      sun.specular = sun.diffuse;
+      sky.intensity = 0.18;
+      sky.diffuse = new BABYLON.Color3(0.20, 0.28, 0.45);
+      scene.clearColor = new BABYLON.Color4(0.04, 0.05, 0.08, 1);
+    }
+
+    // Phase label from SunCalc times. getTimes() returns Date objects keyed by
+    // dawn / sunrise / sunriseEnd / solarNoon / sunsetStart / sunset / dusk.
+    const times = SunCalc.getTimes(now, gardenLat, gardenLng);
+    const t = now.getTime();
+    const ms = (d) => (d instanceof Date && !isNaN(d.getTime())) ? d.getTime() : NaN;
+    let phase = "🌙 Night";
+    if (e > 0) {
+      if (t < ms(times.sunriseEnd))      phase = "🌅 Dawn";
+      else if (t < ms(times.sunsetStart)) phase = "☀ Mid-day";
+      else                                phase = "🌇 Dusk";
+    } else {
+      // Pre-dawn glow vs deep night vs dusk-tail
+      if (!isNaN(ms(times.dawn)) && t > ms(times.dawn) && t < ms(times.sunrise)) phase = "🌅 Dawn";
+      else if (!isNaN(ms(times.dusk)) && t > ms(times.sunset) && t < ms(times.dusk)) phase = "🌇 Dusk";
+      else phase = "🌙 Night";
+    }
+    setSunPhase(phase);
+  }
+
+  let sunTimer = 0;
+  function startSunLoop() {
+    clearInterval(sunTimer);
+    updateSun();
+    sunTimer = setInterval(updateSun, 60 * 1000); // every minute is plenty
+  }
+
+  // Settings modal — gear-icon entry point.
+  function openSettingsModal() {
+    closeModal();
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    const warnHidden = gardenLocationSet ? "hidden" : "";
+    modal.innerHTML = `
+      <h2>⚙ Garden settings</h2>
+      <div class="settings-section">
+        <label>Garden name</label>
+        <input type="text" data-field="name" placeholder="My Garden" />
+      </div>
+      <div class="settings-section">
+        <label>Location (decimal degrees)</label>
+        <div class="settings-row">
+          <input type="number" step="0.0001" data-field="lat" placeholder="40.0" />
+          <input type="number" step="0.0001" data-field="lng" placeholder="-75.0" />
+        </div>
+        <button class="settings-locate" data-act="locate">Use my location</button>
+        <div class="settings-help ${warnHidden}" data-help>
+          Set your location for an accurate sun position. Defaults to ${DEFAULT_LAT.toFixed(1)} / ${DEFAULT_LNG.toFixed(1)}.
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button data-act="cancel">Close</button>
+        <button class="primary" data-act="save">Save</button>
+      </div>
+    `;
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    activeModal = backdrop;
+
+    const nameInput = modal.querySelector('[data-field="name"]');
+    const latInput = modal.querySelector('[data-field="lat"]');
+    const lngInput = modal.querySelector('[data-field="lng"]');
+    const locateBtn = modal.querySelector('[data-act="locate"]');
+    const helpEl = modal.querySelector('[data-help]');
+
+    nameInput.value = gardenName || "";
+    latInput.value = gardenLocationSet ? String(gardenLat) : "";
+    lngInput.value = gardenLocationSet ? String(gardenLng) : "";
+
+    locateBtn.addEventListener("click", () => {
+      if (!navigator.geolocation) { setStatus("geolocation unavailable"); return; }
+      locateBtn.disabled = true;
+      locateBtn.textContent = "Locating…";
+      navigator.geolocation.getCurrentPosition(
+        (p) => {
+          latInput.value = p.coords.latitude.toFixed(4);
+          lngInput.value = p.coords.longitude.toFixed(4);
+          locateBtn.disabled = false;
+          locateBtn.textContent = "Use my location";
+          if (helpEl) helpEl.classList.add("hidden");
+        },
+        (err) => {
+          console.warn("geolocation error", err);
+          locateBtn.disabled = false;
+          locateBtn.textContent = "Use my location";
+          setStatus("couldn't get location — enter manually");
+        },
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+      );
+    });
+
+    const close = () => closeModal();
+    backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) close(); });
+    modal.querySelector('[data-act="cancel"]').addEventListener("click", close);
+    modal.querySelector('[data-act="save"]').addEventListener("click", async () => {
+      const name = nameInput.value.trim();
+      const latRaw = latInput.value.trim();
+      const lngRaw = lngInput.value.trim();
+      const body = {};
+      if (name) body.name = name;
+      if (latRaw !== "") {
+        const v = parseFloat(latRaw);
+        if (isFinite(v) && v >= -90 && v <= 90) body.latitude = v;
+      }
+      if (lngRaw !== "") {
+        const v = parseFloat(lngRaw);
+        if (isFinite(v) && v >= -180 && v <= 180) body.longitude = v;
+      }
+      try {
+        const updated = await Api.updateGarden(gardenId, body);
+        gardenName = updated.name || gardenName;
+        if (typeof updated.latitude === "number") { gardenLat = updated.latitude; gardenLocationSet = true; }
+        if (typeof updated.longitude === "number") { gardenLng = updated.longitude; gardenLocationSet = true; }
+        setStatus("settings saved");
+        startSunLoop();   // re-run sun calc with new coords immediately
+        close();
+      } catch (e) {
+        console.error(e);
+        setStatus("failed to save settings");
+      }
+    });
+    setTimeout(() => nameInput.focus(), 50);
+  }
+  document.getElementById("settingsButton").addEventListener("click", openSettingsModal);
+
   // ---------- bootstrap ----------
   window.addEventListener("resize", () => engine.resize());
   engine.runRenderLoop(() => scene.render());
@@ -1430,6 +1675,19 @@
       setStatus("connecting...");
       gardenId = await ensureGarden();
       setStatus("loading garden...");
+      // Phase 5.1: pull garden meta first so the sun loop starts with the user's
+      // real lat/lng (if set). Fall back to defaults if the garden doesn't have
+      // coordinates yet — the settings modal warns the user to set them.
+      const garden = await Api.getGarden(gardenId);
+      if (garden) {
+        gardenName = garden.name || gardenName;
+        if (typeof garden.latitude === "number" && typeof garden.longitude === "number") {
+          gardenLat = garden.latitude;
+          gardenLng = garden.longitude;
+          gardenLocationSet = true;
+        }
+      }
+      startSunLoop();
       const entities = await Api.getEntities(gardenId);
       entities.forEach(meshForEntity);
       setStatus(entities.length === 0

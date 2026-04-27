@@ -47,6 +47,24 @@ public class GardensController : ControllerBase
         return garden is null ? NotFound() : Ok(garden);
     }
 
+    [HttpPatch("{id:guid}")]
+    public async Task<ActionResult<Garden>> UpdateGarden(
+        Guid id,
+        [FromBody] UpdateGardenRequest req,
+        CancellationToken ct)
+    {
+        var garden = await _repo.GetByIdAsync(id, ct);
+        if (garden is null) return NotFound();
+
+        if (req.Name is not null) garden.Name = req.Name.Trim();
+        if (req.Latitude.HasValue) garden.Latitude = req.Latitude;
+        if (req.Longitude.HasValue) garden.Longitude = req.Longitude;
+        if (req.GrowingZone.HasValue) garden.GrowingZone = req.GrowingZone;
+
+        await _repo.UpdateAsync(garden, ct);
+        return Ok(garden);
+    }
+
     [HttpGet("{id:guid}/entities")]
     public async Task<ActionResult<List<GardenEntity>>> GetEntities(Guid id, CancellationToken ct)
     {
@@ -119,6 +137,12 @@ public class GardensController : ControllerBase
 }
 
 public record CreateGardenRequest(string? Name);
+
+public record UpdateGardenRequest(
+    string? Name,
+    double? Latitude,
+    double? Longitude,
+    int? GrowingZone);
 
 public record CreateEntityRequest(
     EntityKind Kind,
