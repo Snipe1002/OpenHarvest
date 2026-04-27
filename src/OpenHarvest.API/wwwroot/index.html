@@ -22,6 +22,22 @@
       --danger: #f87171;
     }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    /* Phase 5.2.2 (B3) — kill iOS Safari long-press text selection + the gray callout overlay
+       that pops on long-press of an emoji or icon. Apply broadly to interactive surfaces; we
+       opt inputs back IN below so users can still select/copy text inside fields. */
+    html, body, #renderCanvas, #toolbar, #buttons, #radial,
+    .modal-backdrop, .chip, #askButton, #calendarButton, #settingsButton,
+    .prefab-tile, .tags-chip, .tags-suggest-chip, .nudge {
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    input, textarea, .ai-answer, .modal h2, .suggestion {
+      user-select: text;
+      -webkit-user-select: text;
+      -webkit-touch-callout: default;
+    }
     html, body {
       margin: 0; padding: 0; height: 100%; overflow: hidden;
       background: var(--bg); color: var(--text);
@@ -335,9 +351,17 @@
       border: 1px solid var(--border);
       border-radius: 12px;
       font-size: 14px;
-      overflow: hidden;
+      /* Phase 5.2.2 (B4) — horizontal scroll for narrow phones. We have 9 action icons + name
+         + position chip + close button now; on a 360px viewport they overflow. Letting the bar
+         scroll horizontally keeps every control reachable without shrinking touch targets. */
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
       z-index: 40;
     }
+    #toolbar::-webkit-scrollbar { height: 2px; }
+    #toolbar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
     #toolbar.hidden { display: none; }
     #toolbar .tb-icon { font-size: 22px; line-height: 1; flex-shrink: 0; }
     #toolbar .tb-name {
@@ -357,12 +381,15 @@
     #toolbar .tb-actions {
       display: flex; gap: 2px; margin-left: auto; flex-shrink: 0;
     }
+    /* Phase 5.2.2 (B4) — every action button locks its width so the row scrolls intact rather
+       than squashing icons into mush when the parent is narrower than the natural width. */
     #toolbar .tb-actions button {
       width: 44px; height: 44px;
       border: 0; background: transparent; color: var(--text);
       font-size: 20px; cursor: pointer; border-radius: 6px;
       display: flex; align-items: center; justify-content: center;
       padding: 0;
+      flex-shrink: 0;
     }
     #toolbar .tb-actions button:hover { background: var(--panel-hover); }
     #toolbar .tb-actions button:disabled { opacity: 0.4; cursor: default; }
@@ -434,6 +461,47 @@
       cursor: pointer;
     }
     .prefab-tile .x:hover { background: var(--danger); color: #2a0a0a; }
+    /* Phase 5.2.2 (B5): color swatch row in the Style modal. Tiles are 44x44 (touch target),
+       gap is 6px, and the active tile gets the accent border so the user can see what the
+       current pick is. Custom-hex input sits beneath the swatches and accepts any HTML5
+       <input type="color"> value (browsers handle the wheel UI). */
+    .color-pick {
+      display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+    }
+    .color-pick .opt {
+      width: 44px; height: 44px;
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.4);
+      position: relative;
+    }
+    .color-pick .opt.active {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.4), 0 0 0 2px rgba(74, 222, 128, 0.35);
+    }
+    .color-pick .opt[data-default="1"]::after {
+      content: ""; position: absolute; inset: 4px;
+      border: 1px dashed rgba(255,255,255,0.5);
+      border-radius: 4px;
+      pointer-events: none;
+    }
+    .color-custom-row {
+      display: flex; align-items: center; gap: 8px; margin-top: 12px;
+    }
+    .color-custom-row label { font-size: 12px; color: var(--text-dim); }
+    .color-custom-row input[type="color"] {
+      width: 44px; height: 44px; padding: 0;
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--bg);
+      cursor: pointer;
+    }
+    .color-custom-row input[type="text"] {
+      flex: 1; padding: 10px; font-size: 14px;
+      background: var(--bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px;
+    }
+
     /* Phase 5.4: emoji-picker row in the Save Template modal. */
     .emoji-pick {
       display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
@@ -551,6 +619,10 @@
       <button data-act="diagnose" title="Diagnose">🔍</button>
       <button data-act="resize" title="Resize">📐</button>
       <button data-act="move" title="Move">🚚</button>
+      <!-- Phase 5.2.2 (B5): per-instance material color. Opens a swatch + custom-hex modal;
+           the chosen color is stored in entity.extensions.color and read by the prefab
+           builder when it next renders the mesh. -->
+      <button data-act="style" title="Style">🎨</button>
       <!-- Phase 5.3: tags. Shows the count when present, just the icon otherwise. -->
       <button data-act="tags" title="Tags">🏷<span class="tb-tags-count"></span></button>
       <button data-act="duplicate" title="Duplicate">📋</button>
@@ -570,7 +642,10 @@
   <script src="lib/suncalc.js"></script>
   <!-- Phase 5.2: prefab library — must load before app.js so window.OpenHarvestPrefabs is
        available when app.js wires up the picker + meshForEntity branch. -->
-  <script src="lib/prefabs.js"></script>
-  <script src="app.js"></script>
+  <!-- Phase 5.2.2: cache-bust suffix bumps with each UX-polish revision so iPhone Safari
+       (which aggressively caches JS) picks up the new build without a full app reset. Bump
+       the number whenever app.js, prefabs.js, or this file changes. -->
+  <script src="lib/prefabs.js?v=522"></script>
+  <script src="app.js?v=522"></script>
 </body>
 </html>
