@@ -12,6 +12,7 @@ import HouseToolbar, {
 import InspectorCard from './components/InspectorCard'
 import SampleBuilding from './components/SampleBuilding'
 import SnapChip from './components/SnapChip'
+import StickyChip from './components/StickyChip'
 import ToastBar from './components/ToastBar'
 import TranslateStatusPill from './components/TranslateStatusPill'
 import WallInspectorCard from './components/WallInspectorCard'
@@ -109,7 +110,11 @@ export default function App() {
             createWindowOnWall(wall.id, localX)
           }
         }
-        setHousePlacement(null)
+        // Sticky: stay armed for another door/window placement on another wall.
+        // Otherwise: exit.
+        if (!useGarden.getState().stickyPlacement) {
+          setHousePlacement(null)
+        }
         event.stopPropagation()
         return
       }
@@ -142,6 +147,7 @@ export default function App() {
       </Viewer>
       {/* HTML overlays — siblings of the Viewer canvas. */}
       <SnapChip />
+      <StickyChip />
       <HouseToolbar />
       <AddToolbar />
       <TranslateStatusPill />

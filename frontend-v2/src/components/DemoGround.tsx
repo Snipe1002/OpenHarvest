@@ -109,12 +109,19 @@ export default function DemoGround() {
         })
         return
       }
-      // Second corner: build the wall and exit placement.
+      // Second corner: build the wall.
       const wallId = createWallBetween(housePlacement.pendingFirstCorner, [sx, sz])
       if (!wallId) {
         useGarden.getState().setToast('No level found — cannot create wall')
       }
-      useGarden.getState().setHousePlacement(null)
+      // Sticky: stay armed for another wall (reset to first-corner-pending).
+      // Otherwise: exit placement entirely.
+      const sticky = useGarden.getState().stickyPlacement
+      if (sticky) {
+        useGarden.getState().setHousePlacement({ type: 'wall' })
+      } else {
+        useGarden.getState().setHousePlacement(null)
+      }
       return
     }
 
@@ -153,7 +160,11 @@ export default function DemoGround() {
         useGarden.getState().setToast(msg)
         console.error('[DemoGround] createEntity failed', err)
       } finally {
-        useGarden.getState().setPlacement(null)
+        // Sticky: stay armed for another placement of the same kind. Esc still
+        // cancels.
+        if (!useGarden.getState().stickyPlacement) {
+          useGarden.getState().setPlacement(null)
+        }
       }
       return
     }
