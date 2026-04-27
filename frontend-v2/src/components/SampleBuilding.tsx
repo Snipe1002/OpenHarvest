@@ -1,36 +1,29 @@
 /**
- * SampleBuilding — populates Pascal's scene store with a placeholder room.
+ * SampleBuilding — minimal scaffold to keep Pascal's Viewer rendering.
  *
- * Pascal's `<Viewer>` requires building geometry to render: with no walls,
- * the viewer short-circuits and the canvas stays black, even with our own
- * lights and camera. So we seed a small 5×5m room (door + window) on first
- * mount.
+ * Pascal's `<Viewer>` short-circuits and renders black if its scene has
+ * no building geometry, even when our own R3F children (lights, camera,
+ * ground, garden entities) are mounted. To work around that without
+ * showing a placeholder room, we create ONE invisible anchor wall: 1cm
+ * × 1cm × 1cm, placed at (-100, -100) on the plan grid (far outside the
+ * camera's natural view of the garden plane at the origin).
  *
- * The user can clear these walls at runtime via the "Clear House" button —
- * see `ClearHouseButton` in the UI overlays.
+ * The user gets an empty-looking scene. Pascal's renderer is happy.
+ * Real walls land later via house-building tooling (next milestone).
  *
- * React 19 strict-mode safe: a ref guards against double-create when the
- * effect runs twice on mount.
+ * React 19 strict-mode safe via a ref guard.
  */
 import { useEffect, useRef } from 'react'
-import {
-  DoorNode,
-  useScene,
-  WallNode,
-  WindowNode,
-  type AnyNodeId,
-} from '@pascal-app/core'
+import { useScene, WallNode, type AnyNodeId } from '@pascal-app/core'
 
 export default function SampleBuilding() {
-  const populated = useRef(false)
+  const seeded = useRef(false)
 
   useEffect(() => {
-    if (populated.current) return
-    populated.current = true
+    if (seeded.current) return
+    seeded.current = true
 
     const scene = useScene.getState()
-
-    // Bootstrap Site -> Building -> Level (no-op if already loaded).
     scene.loadScene()
 
     const levelEntry = Object.values(useScene.getState().nodes).find(
@@ -39,65 +32,21 @@ export default function SampleBuilding() {
     if (!levelEntry) return
     const levelId = levelEntry.id as AnyNodeId
 
-    // If walls already exist on this level, assume populated.
     const alreadyHasWalls = Object.values(useScene.getState().nodes).some(
       (n) => n.type === 'wall' && n.parentId === levelId,
     )
     if (alreadyHasWalls) return
 
-    const wallHeight = 2.5
-    const wallThickness = 0.2
-
-    const southWall = WallNode.parse({
-      start: [0, 0],
-      end: [5, 0],
-      height: wallHeight,
-      thickness: wallThickness,
+    // Single tiny anchor wall — 1cm cube far from origin. Invisible in
+    // practice; satisfies Pascal's render-path requirement.
+    const anchor = WallNode.parse({
+      start: [-100, -100],
+      end: [-99.99, -100],
+      height: 0.01,
+      thickness: 0.01,
       children: [],
     })
-    const eastWall = WallNode.parse({
-      start: [5, 0],
-      end: [5, 5],
-      height: wallHeight,
-      thickness: wallThickness,
-      children: [],
-    })
-    const northWall = WallNode.parse({
-      start: [5, 5],
-      end: [0, 5],
-      height: wallHeight,
-      thickness: wallThickness,
-      children: [],
-    })
-    const westWall = WallNode.parse({
-      start: [0, 5],
-      end: [0, 0],
-      height: wallHeight,
-      thickness: wallThickness,
-      children: [],
-    })
-
-    const { createNode } = useScene.getState()
-    createNode(southWall, levelId)
-    createNode(eastWall, levelId)
-    createNode(northWall, levelId)
-    createNode(westWall, levelId)
-
-    const door = DoorNode.parse({
-      wallId: southWall.id,
-      position: [2.5, 0, 0],
-      width: 0.9,
-      height: 2.1,
-    })
-    createNode(door, southWall.id)
-
-    const window_ = WindowNode.parse({
-      wallId: eastWall.id,
-      position: [2.5, 1.0, 0],
-      width: 1.5,
-      height: 1.2,
-    })
-    createNode(window_, eastWall.id)
+    useScene.getState().createNode(anchor, levelId)
   }, [])
 
   return null
