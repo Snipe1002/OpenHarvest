@@ -214,7 +214,36 @@
 
     let mesh;
     let yOffset = 0;
-    if (kind === "Cylinder") {
+    let assignDefaultMaterial = true;
+    if (kind === "Prefab") {
+      // Phase 5.2: hand off mesh construction to the prefab library. The builder anchors the
+      // mesh at its own ground origin (y = 0 at the bottom of the footprint), so we don't
+      // need a yOffset like Box/Cylinder do. If the prefabRef is unknown — ref drift, typo,
+      // or an old save from a removed prefab — fall back to a labelled grey box so the entity
+      // is still selectable + editable rather than vanishing from the scene.
+      const lib = window.OpenHarvestPrefabs || {};
+      const def_ = lib[geom.prefabRef];
+      if (def_ && typeof def_.build === "function") {
+        const size = geom.size || def_.defaultSize;
+        try {
+          mesh = def_.build(BABYLON, scene, `mesh_${entity.id}`, size);
+        } catch (err) {
+          console.error("prefab build failed", geom.prefabRef, err);
+          mesh = null;
+        }
+      }
+      if (!mesh) {
+        const fallbackSize = (def_ && def_.defaultSize) || { x: 2, y: 1, z: 2 };
+        mesh = BABYLON.MeshBuilder.CreateBox(`mesh_${entity.id}`, {
+          width: fallbackSize.x, height: fallbackSize.y, depth: fallbackSize.z,
+        }, scene);
+        yOffset = fallbackSize.y / 2;
+      } else {
+        // Builder already placed primitives at the correct y; the prefab's local origin is at
+        // ground level. Materials are owned by the prefab — don't stomp them.
+        assignDefaultMaterial = false;
+      }
+    } else if (kind === "Cylinder") {
       const h = geom.height || 1;
       mesh = BABYLON.MeshBuilder.CreateCylinder(`mesh_${entity.id}`,
         { diameter: (geom.radius || 0.5) * 2, height: h }, scene);
@@ -228,13 +257,16 @@
     mesh.position = new BABYLON.Vector3(pos.x, pos.y + yOffset, pos.z);
     mesh.scaling = new BABYLON.Vector3(scale.x, scale.y, scale.z);
     mesh.metadata = { entityId: entity.id, kind: entity.kind };
+    mesh.isPickable = true;
 
-    const mat = new BABYLON.StandardMaterial(`mat_${entity.id}`, scene);
-    mat.diffuseColor =
-      entity.kind === "Plant" ? new BABYLON.Color3(0.20, 0.65, 0.15) :
-      entity.kind === "Bed"   ? new BABYLON.Color3(0.45, 0.30, 0.18) :
-                                new BABYLON.Color3(0.6, 0.6, 0.6);
-    mesh.material = mat;
+    if (assignDefaultMaterial) {
+      const mat = new BABYLON.StandardMaterial(`mat_${entity.id}`, scene);
+      mat.diffuseColor =
+        entity.kind === "Plant" ? new BABYLON.Color3(0.20, 0.65, 0.15) :
+        entity.kind === "Bed"   ? new BABYLON.Color3(0.45, 0.30, 0.18) :
+                                  new BABYLON.Color3(0.6, 0.6, 0.6);
+      mesh.material = mat;
+    }
 
     let label = null;
     if (entity.name) {
@@ -245,7 +277,14 @@
   }
 
   function makeLabel(eid, name, parentMesh, geom) {
-    const labelHeight = ((geom.height || 0) + (geom.size?.y || 0)) / 2 + 0.6;
+    // Prefabs anchor their mesh at ground (y=0 at the floor of the footprint), so the label
+    // needs to sit at full geometry height + clearance. Box/Cylinder mesh origins are at the
+    // mesh centre, so the label only needs half-height + clearance. The prefab branch keys
+    // off geometry.kind so we don't accidentally double-shift other future kinds.
+    const isPrefab = geom?.kind === "Prefab";
+    const labelHeight = isPrefab
+      ? (geom.size?.y || 1) + 0.6
+      : ((geom.height || 0) + (geom.size?.y || 0)) / 2 + 0.6;
     const plane = BABYLON.MeshBuilder.CreatePlane(`label_${eid}`, { width: 2.5, height: 0.7 }, scene);
     plane.parent = parentMesh;
     plane.position = new BABYLON.Vector3(0, labelHeight, 0);
@@ -272,11 +311,16 @@
     BedFirstCorner: "bed-1",
     BedSecondCorner: "bed-2",
     PlantPick: "plant-pick",
+    PrefabPick: "prefab-pick",
     Move: "move",
   };
   let mode = Mode.Idle;
   let bedFirst = null;
   let bedPreview = null;
+  // Phase 5.2: while in PrefabPick mode, the prefab the user selected from the picker. The
+  // next ground tap reads this and POSTs an entity with geometry.kind = "Prefab". Cleared on
+  // exit from PrefabPick (via setMode(Idle)).
+  let pendingPrefabRef = null;
 
   // ---------- Phase 5.0 selection state ----------
   // selectedEntityId is the id of the entity currently shown in the edit panel.
@@ -289,11 +333,13 @@
     mode = next;
     buttons.forEach(b => b.classList.toggle("active",
       (next.startsWith("bed-") && b.dataset.mode === "bed") ||
-      (next === Mode.PlantPick && b.dataset.mode === "plant")));
+      (next === Mode.PlantPick && b.dataset.mode === "plant") ||
+      (next === Mode.PrefabPick && b.dataset.mode === "prefab")));
     canvas.style.cursor = (next === Mode.Idle) ? "" : "crosshair";
     if (next === Mode.Idle) {
       bedFirst = null;
       if (bedPreview) { bedPreview.dispose(); bedPreview = null; }
+      pendingPrefabRef = null;
     }
   }
 
@@ -310,6 +356,11 @@
         if (mode === Mode.PlantPick) { setMode(Mode.Idle); setStatus("place-mode off"); return; }
         setMode(Mode.PlantPick);
         setStatus("tap a spot to place a plant");
+      } else if (m === "prefab") {
+        // Toggling the prefab button while already in PrefabPick exits placement.
+        if (mode === Mode.PrefabPick) { setMode(Mode.Idle); setStatus("place-mode off"); return; }
+        // Open the picker first; on selection we enter PrefabPick mode and arm the next ground tap.
+        openPrefabPickerModal();
       }
     });
   });
@@ -374,6 +425,16 @@
         const p = pickGround();
         if (p) {
           openPlantModal(p);
+          setMode(Mode.Idle);
+        }
+      } else if (mode === Mode.PrefabPick) {
+        // Phase 5.2: a prefab was selected in the picker; this tap places it. If somehow
+        // pendingPrefabRef is null (user re-entered the mode without picking), bail back to idle.
+        const p = pickGround();
+        if (p && pendingPrefabRef) {
+          createPrefab(p, pendingPrefabRef).catch(err => { console.error(err); setStatus("failed to place prefab"); });
+          setMode(Mode.Idle);
+        } else if (p) {
           setMode(Mode.Idle);
         }
       } else if (mode === Mode.Idle) {
@@ -448,6 +509,89 @@
     const created = await Api.addEntity(gardenId, body);
     meshForEntity(created);
     setStatus(`placed ${created.name}`);
+  }
+
+  // Phase 5.2: place a prefab entity at point p. Stores Geometry as kind=Prefab + prefabRef +
+  // a default-size override copied from the prefab definition so the server has a faithful
+  // record of the on-load footprint (the edit panel can shrink/grow it later).
+  async function createPrefab(p, prefabRef) {
+    const lib = window.OpenHarvestPrefabs || {};
+    const prefab = lib[prefabRef];
+    if (!prefab) { setStatus("unknown prefab: " + prefabRef); return; }
+    // Prefabs default to the "Bed" semantic kind — users place them into the world the same
+    // way as raised beds. A future Phase could introduce a "Prefab" entity kind, but reusing
+    // Bed lets the existing parent-of-plant logic work without a backend migration.
+    const body = {
+      kind: "Bed",
+      name: prefab.name,
+      transform: {
+        position: { x: p.x, y: 0, z: p.z },
+        rotation: { x: 0, y: 0, z: 0, w: 1 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      geometry: {
+        kind: "Prefab",
+        prefabRef,
+        size: { ...prefab.defaultSize },
+      },
+    };
+    setStatus("placing " + prefab.name + "...");
+    const created = await Api.addEntity(gardenId, body);
+    meshForEntity(created);
+    setStatus(`placed ${prefab.name}`);
+  }
+
+  function openPrefabPickerModal() {
+    closeModal();
+    const lib = window.OpenHarvestPrefabs;
+    if (!lib || typeof lib.__listByCategory !== "function") {
+      setStatus("prefab library not loaded");
+      return;
+    }
+    const groups = lib.__listByCategory();
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    const modal = document.createElement("div");
+    modal.className = "modal";
+
+    const sections = groups.map(([cat, items]) => `
+      <div class="prefab-cat">${escapeHtml(cat)}</div>
+      <div class="prefab-grid">
+        ${items.map(p => `
+          <div class="prefab-tile" data-slug="${escapeHtml(p.slug)}">
+            <div class="icon">${escapeHtml(p.icon || "📦")}</div>
+            <div class="label">${escapeHtml(p.name)}</div>
+          </div>
+        `).join("")}
+      </div>
+    `).join("");
+
+    modal.innerHTML = `
+      <h2>Place a prefab</h2>
+      ${sections}
+      <div class="modal-actions">
+        <button data-act="cancel">Cancel</button>
+      </div>
+    `;
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    activeModal = backdrop;
+
+    modal.querySelectorAll(".prefab-tile").forEach(tile => {
+      tile.addEventListener("click", () => {
+        const slug = tile.dataset.slug;
+        if (!slug) return;
+        pendingPrefabRef = slug;
+        closeModal();
+        setMode(Mode.PrefabPick);
+        const def_ = lib[slug];
+        setStatus(`tap the ground to place ${def_?.name || slug}`);
+      });
+    });
+
+    backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) closeModal(); });
+    modal.querySelector('[data-act="cancel"]').addEventListener("click", () => closeModal());
   }
 
   function findContainingBed(p) {
@@ -939,6 +1083,14 @@
   async function openResizeModal(eid) {
     const rec = meshRegistry.get(eid);
     if (!rec || rec.entity.kind !== "Bed") return;
+    // Phase 5.2: prefab-geometry beds are sized through the persistent edit panel (which has
+    // a clamped 3-axis size editor). Steer the user there instead of squashing the prefab
+    // through the legacy 2-axis Box resizer, which would discard prefabRef on save.
+    if (rec.entity.geometry?.kind === "Prefab") {
+      selectEntity(eid);
+      setStatus("use the edit panel to resize this prefab");
+      return;
+    }
     const size = rec.entity.geometry?.size || { x: 4, y: 0.4, z: 4 };
     closeModal();
     const backdrop = document.createElement("div");
@@ -1047,12 +1199,27 @@
     const t = entity.transform || {};
     const pos = t.position || { x: 0, y: 0, z: 0 };
     const g = entity.geometry || {};
-    const size = g.size || { x: 1, y: 1, z: 1 };
-    const isBed = entity.kind === "Bed";
+    // Phase 5.2: prefab geometry. Prefab entities are stored as kind=Bed today (so they
+    // parent plants the same way raised beds do) but their geometry.kind === "Prefab" picks
+    // them out for size+display tweaks. We resolve the prefab definition once here so the
+    // header can show the icon + display name, and the size editor can clamp to the prefab's
+    // own min/max bounds.
+    const isPrefab = g.kind === "Prefab";
+    const prefabDef = isPrefab ? (window.OpenHarvestPrefabs?.[g.prefabRef] || null) : null;
+    const sizeDefault = (isPrefab && prefabDef) ? prefabDef.defaultSize : { x: 1, y: 1, z: 1 };
+    const size = g.size || sizeDefault;
+    const isBed = entity.kind === "Bed" && !isPrefab;
     const isPlant = entity.kind === "Plant";
+    // Size bounds for the inputs. Beds use the historical 1–30 ft range; prefabs use whatever
+    // the prefab declared. Plants don't get size editors.
+    const minSize = (isPrefab && prefabDef) ? prefabDef.minSize : { x: 1, y: 0.4, z: 1 };
+    const maxSize = (isPrefab && prefabDef) ? prefabDef.maxSize : { x: 30, y: 30, z: 30 };
+    const headerLabel = isPrefab
+      ? `${prefabDef?.icon || "📦"} ${escapeHtml(prefabDef?.name || g.prefabRef || "Prefab")}: ${escapeHtml(entity.name || "")}`
+      : `${escapeHtml(entity.kind)}: ${escapeHtml(entity.name || "")}`;
     content.innerHTML = `
       <div class="ep-header">
-        <span>${escapeHtml(entity.kind)}: ${escapeHtml(entity.name || "")}</span>
+        <span>${headerLabel}</span>
         <span class="ep-close" data-act="close" title="Close">×</span>
       </div>
       <div class="ep-section">
@@ -1078,6 +1245,15 @@
         <div class="ep-row row-2">
           <input type="number" id="ep-sw" min="1" max="30" step="0.5" value="${(+size.x).toFixed(1)}" title="Width" />
           <input type="number" id="ep-sd" min="1" max="30" step="0.5" value="${(+size.z).toFixed(1)}" title="Depth" />
+        </div>
+      </div>` : ""}
+      ${isPrefab ? `
+      <div class="ep-section">
+        <label>Size (ft) — width / height / depth</label>
+        <div class="ep-row">
+          <input type="number" id="ep-pw" min="${minSize.x}" max="${maxSize.x}" step="0.5" value="${(+size.x).toFixed(2)}" title="Width" />
+          <input type="number" id="ep-ph" min="${minSize.y}" max="${maxSize.y}" step="0.5" value="${(+size.y).toFixed(2)}" title="Height" />
+          <input type="number" id="ep-pd" min="${minSize.z}" max="${maxSize.z}" step="0.5" value="${(+size.z).toFixed(2)}" title="Depth" />
         </div>
       </div>` : ""}
       <div class="ep-section">
@@ -1164,6 +1340,37 @@
       for (const el of [sw, sd]) {
         if (!el) continue;
         el.addEventListener("change", commitSize);
+        el.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); el.blur(); } });
+      }
+    }
+
+    if (isPrefab) {
+      // Prefab size editor — clamps to the prefab definition's own min/max so a Pot can't be
+      // accidentally sized like a Greenhouse. We send a fresh Geometry that preserves the
+      // prefabRef; the server stores it verbatim and SignalR fans out to peers, who resolve
+      // the same prefab definition and rebuild the mesh.
+      const pw = content.querySelector("#ep-pw");
+      const ph = content.querySelector("#ep-ph");
+      const pd = content.querySelector("#ep-pd");
+      const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, +v));
+      const commitPrefabSize = async () => {
+        const w = clamp(pw.value, minSize.x, maxSize.x);
+        const h = clamp(ph.value, minSize.y, maxSize.y);
+        const d = clamp(pd.value, minSize.z, maxSize.z);
+        if (w === +size.x && h === +size.y && d === +size.z) return;
+        try {
+          const updated = await Api.updateEntity(gardenId, eid, {
+            geometry: { kind: "Prefab", prefabRef: g.prefabRef, size: { x: w, y: h, z: d } },
+          });
+          disposeEntity(eid);
+          meshForEntity(updated);
+          selectEntity(eid);
+          setStatus(`resized to ${w.toFixed(1)}×${h.toFixed(1)}×${d.toFixed(1)}`);
+        } catch (e) { console.error(e); setStatus("resize failed"); }
+      };
+      for (const el of [pw, ph, pd]) {
+        if (!el) continue;
+        el.addEventListener("change", commitPrefabSize);
         el.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); el.blur(); } });
       }
     }
