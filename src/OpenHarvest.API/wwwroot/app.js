@@ -421,6 +421,16 @@
     }
     meshRegistry.set(entity.id, { entity, mesh, label });
 
+    // Phase 6.0 — if this is a wall mesh and cut-away is currently active, fade it on the
+    // way in so locally-placed walls (or initial-load walls) don't pop opaque for a frame
+    // before the next refresh sweep. Cheap: the cut-away walker is O(materials) and walls
+    // share one StandardMaterial, so this runs at most once per material per scene.
+    // (cutawayActive + helpers are declared later in this IIFE; they're always initialised by
+    // the time meshForEntity is called from the async bootstrap or SignalR callbacks.)
+    if (cutawayActive && mesh?.metadata?.isWall) {
+      applyCutawayToMaterial(mesh.material, CUTAWAY_ALPHA);
+    }
+
     // Phase 5.3 — re-attach orphaned children. If this newly created mesh is the parent for
     // any already-loaded children (load order can deliver children before their parent), pull
     // each child back into the scene graph and convert its position into parent-local space
@@ -2298,6 +2308,85 @@
   // Phase 5.2.2 (B6) — initial snap-grid visibility based on persisted snap setting.
   refreshSnapGrid();
 
+  // ---------- Phase 6.0 cut-away view ----------
+  // When ON, every wall mesh (anything whose metadata.isWall === true) gets its dominant
+  // material's `alpha` lowered to 0.30 so the user can peer into the rooms from above.
+  // This is a v1 simplification — true "clip everything above Y=4 ft" needs a custom shader
+  // or per-mesh BABYLON.Plane clipping, both of which fight Mesh.MergeMeshes for our door /
+  // window composites. Fading the whole wall is uglier but instantly readable.
+  //
+  // We mutate the SHARED prefab materials directly. That's safe in our codebase because every
+  // wall in a scene shares the same `houseWall` material from the prefab palette, so a single
+  // alpha mutation per material updates every wall in lockstep. Per-instance tints (Style
+  // button) clone the material — those clones also get walked here so per-tinted walls fade
+  // correctly. Floors are NOT faded; they're the user's anchor while inspecting layout.
+  const CUTAWAY_ALPHA = 0.30;
+  const cutawayKey = "openharvest.cutaway";
+  let cutawayActive = localStorage.getItem(cutawayKey) === "1";
+
+  function refreshCutawayChip() {
+    const chip = document.getElementById("cutawayChip");
+    if (!chip) return;
+    chip.classList.toggle("active", cutawayActive);
+    chip.title = cutawayActive
+      ? "Cut-away ON — walls are translucent. Tap to restore."
+      : "Toggle cut-away view (fade walls to see into rooms)";
+  }
+
+  // Walk every registered mesh + its children, find walls (metadata.isWall), and set alpha
+  // on the owning material(s). For MultiMaterial composites (door + window) we ONLY fade the
+  // first sub-material — by construction every house builder passes [wall, accent] to the
+  // merge, so subMaterials[0] is the drywall body. Skipping subMaterials[1] keeps the wood
+  // door panel and the glass-blue window pane visible during cut-away, which is more
+  // readable than a uniform fade of every surface in the segment.
+  function applyCutawayToMaterial(mat, alpha) {
+    if (!mat) return;
+    if (mat instanceof BABYLON.MultiMaterial) {
+      const subs = mat.subMaterials || [];
+      if (subs.length > 0 && subs[0]) subs[0].alpha = alpha;
+    } else {
+      mat.alpha = alpha;
+    }
+  }
+
+  function refreshCutaway() {
+    const targetAlpha = cutawayActive ? CUTAWAY_ALPHA : 1.0;
+    // Walk both the registry (which carries entity meshes) and the scene (catches any merged
+    // child meshes that aren't directly registered but still have isWall metadata).
+    const seen = new WeakSet();
+    const visit = (m) => {
+      if (!m || m.isDisposed?.()) return;
+      if (m.metadata?.isWall && m.material && !seen.has(m.material)) {
+        seen.add(m.material);
+        applyCutawayToMaterial(m.material, targetAlpha);
+      }
+    };
+    for (const rec of meshRegistry.values()) {
+      visit(rec.mesh);
+      // Cover any registered children (e.g., a future composite that parents instead of merges).
+      if (rec.mesh && rec.mesh.getChildMeshes) {
+        for (const child of rec.mesh.getChildMeshes(false)) visit(child);
+      }
+    }
+    // Belt-and-braces: also walk loose scene meshes that carry the isWall flag.
+    for (const m of scene.meshes) visit(m);
+  }
+
+  function toggleCutaway() {
+    cutawayActive = !cutawayActive;
+    localStorage.setItem(cutawayKey, cutawayActive ? "1" : "0");
+    refreshCutawayChip();
+    refreshCutaway();
+    setStatus(cutawayActive ? "cut-away view: ON" : "cut-away view: off");
+  }
+
+  document.getElementById("cutawayChip")?.addEventListener("click", toggleCutaway);
+  refreshCutawayChip();
+  // Apply on first load so a persisted ON state takes effect after entities arrive. We call
+  // refreshCutaway() once after the initial entity load below; this initial call is a no-op
+  // when the registry is empty.
+  refreshCutaway();
+
   // ---------- live sync (SignalR) ----------
   let connection = null;
 
@@ -2311,6 +2400,10 @@
     if (selectedEntityId === entity.id) {
       selectEntity(entity.id);
     }
+    // Phase 6.0 — keep the cut-away state coherent. A wall placed while the user has
+    // cut-away ON should appear faded immediately; without this re-apply the new wall would
+    // render at full opacity until the next toggle.
+    if (typeof refreshCutaway === "function") refreshCutaway();
   }
 
   function applyEntityDelete(entityId) {
@@ -2794,6 +2887,8 @@
       startSunLoop();
       const entities = await Api.getEntities(gardenId);
       entities.forEach(meshForEntity);
+      // Phase 6.0 — re-apply persisted cut-away state now that walls exist in the scene.
+      refreshCutaway();
       setStatus(entities.length === 0
         ? "empty garden — tap Bed or Plant to start"
         : `loaded ${entities.length} entities — tap to select, long-press for radial`);

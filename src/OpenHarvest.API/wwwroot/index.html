@@ -422,6 +422,12 @@
        Snap pill is the widest ("Snap: 1 ft"), so it gets a ~120px slot. */
     #unitChip { right: 230px; min-width: 44px; text-align: center; }
     #snapChip { right: 290px; min-width: 96px; text-align: center; }
+    /* Phase 6.0: cut-away toggle. Sits left of the snap chip and reads as a single-emoji pill
+       so the row stays compact on narrow phones. When ON, the chip uses the accent colour
+       to make the active state legible at a glance. The chip is the leftmost chrome in the
+       top row — beyond ~390px right-edge offset on a 360px viewport it would clip, so we
+       only add it once (no second variant). */
+    #cutawayChip { right: 396px; min-width: 56px; text-align: center; }
 
     /* Phase 5.2: prefab picker. Tile grid with category headers — feels native to a touch
        device with thumb-sized targets. Tapping a tile selects it and closes the modal. */
@@ -587,6 +593,10 @@
   <button id="settingsButton" title="Garden settings (location)">⚙</button>
   <button id="unitChip" class="chip" title="Tap to cycle units (ft / in / cm)">ft</button>
   <button id="snapChip" class="chip" title="Tap to cycle snap-to-grid">Snap: off</button>
+  <!-- Phase 6.0: cut-away toggle. When ON, every wall mesh in the scene fades to alpha 0.30
+       so the user can see into rooms top-down. v1 fades the entire wall (not just-above-Y) —
+       a true clip-plane / per-fragment approach is queued for Phase 6.5. -->
+  <button id="cutawayChip" class="chip" title="Toggle cut-away view (fade walls to see into rooms)">🏠</button>
   <div id="compass" aria-hidden="true">
     <div class="needle"></div>
     <div class="needle tail"></div>
@@ -645,7 +655,7 @@
   <!-- Phase 5.2.2: cache-bust suffix bumps with each UX-polish revision so iPhone Safari
        (which aggressively caches JS) picks up the new build without a full app reset. Bump
        the number whenever app.js, prefabs.js, or this file changes. -->
-  <script src="lib/prefabs.js?v=522"></script>
-  <script src="app.js?v=522"></script>
+  <script src="lib/prefabs.js?v=600"></script>
+  <script src="app.js?v=600"></script>
 </body>
 </html>

@@ -41,6 +41,16 @@
       plasticBlack:make("prefab.plasticBlack",C(0.20, 0.20, 0.22)),
       metal:       make("prefab.metal",       C(0.70, 0.70, 0.75), { specular: C(0.40, 0.40, 0.45) }),
       glass:       make("prefab.glass",       C(0.85, 0.92, 0.95), { alpha: 0.35 }),
+      // Phase 6.0 — house primitives. Floors get a warm wood tone (the user can re-tint
+      // per-instance via the Style button); walls are a warm drywall white. Door + window
+      // accents reuse `wood` and a sky-blue translucent glass respectively. We keep these in
+      // the shared cache so all walls in a scene share one StandardMaterial — important for
+      // the cut-away toggle, which mutates `mat.alpha` once per material to fade every wall
+      // in lockstep without per-mesh fiddling.
+      houseFloor:  make("prefab.houseFloor",  C(0.70, 0.65, 0.55)),
+      houseWall:   make("prefab.houseWall",   C(0.92, 0.90, 0.86)),
+      houseDoor:   make("prefab.houseDoor",   C(0.45, 0.30, 0.18)),
+      houseGlass:  make("prefab.houseGlass",  C(0.55, 0.75, 0.92), { alpha: 0.5 }),
     };
     matCache.set(scene, p);
     return p;
@@ -341,6 +351,101 @@
     return mergeAndName(B, parts, name, scene);
   }
 
+  // ---------- Phase 6.0 — house primitives ----------
+  // Floor / Wall / Door / Window. The user composes a footprint by tiling floor slabs and then
+  // erects walls along their edges. v1 walls are solid boxes — we don't do CSG cutouts for
+  // doors/windows yet (that's Phase 6.5). Doors and windows render as a wall + a coloured plane
+  // glued to the front face so the silhouette still reads "this segment has a door here".
+  //
+  // metadata.isWall = true is stamped on every wall-bearing mesh so the cut-away toggle in
+  // app.js can sweep the scene and lower wall material alpha above a height threshold.
+
+  function buildFloorSlab(B, scene, name, size) {
+    const p = pal(scene);
+    const slab = B.MeshBuilder.CreateBox(name, {
+      width: size.x, height: size.y, depth: size.z,
+    }, scene);
+    slab.material = p.houseFloor;
+    // Anchor at the bottom so position.y = 0 sits on the ground (matches the rest of the
+    // prefab library — every builder emits ground-anchored geometry).
+    slab.position.y = size.y / 2;
+    slab.metadata = slab.metadata || {};
+    slab.metadata.isFloor = true;
+    return slab;
+  }
+
+  function buildWallSegment(B, scene, name, size) {
+    const p = pal(scene);
+    const wall = B.MeshBuilder.CreateBox(name, {
+      width: size.x, height: size.y, depth: size.z,
+    }, scene);
+    wall.material = p.houseWall;
+    wall.position.y = size.y / 2;
+    wall.metadata = wall.metadata || {};
+    wall.metadata.isWall = true;
+    return wall;
+  }
+
+  // Wall + door panel composite. We merge the two into a single pickable mesh so selection
+  // stays a one-pick affair — but MergeMeshes fuses materials into a MultiMaterial, so the
+  // cut-away alpha sweep needs to walk subMaterials, not just material.alpha. The toggle in
+  // app.js handles both StandardMaterial and MultiMaterial cases.
+  function buildDoor(B, scene, name, size) {
+    const p = pal(scene);
+    const wall = B.MeshBuilder.CreateBox(name + "_wall", {
+      width: size.x, height: size.y, depth: size.z,
+    }, scene);
+    wall.material = p.houseWall;
+    wall.position.y = size.y / 2;
+
+    const doorWidth = Math.min(3, size.x * 0.75);
+    const doorHeight = Math.min(7, size.y * 0.85);
+    const doorPlane = B.MeshBuilder.CreatePlane(name + "_door", {
+      width: doorWidth, height: doorHeight,
+    }, scene);
+    doorPlane.material = p.houseDoor;
+    doorPlane.position.y = doorHeight / 2;
+    // Push the door panel a hair in front of the wall's front face so we don't z-fight.
+    doorPlane.position.z = -(size.z / 2 + 0.02);
+
+    const merged = mergeAndName(B, [wall, doorPlane], name, scene);
+    if (merged) {
+      merged.metadata = merged.metadata || {};
+      merged.metadata.isWall = true;
+    }
+    return merged;
+  }
+
+  // Wall + translucent window panel composite. Mid-height window matching standard residential
+  // proportions. Like buildDoor, this hands off to mergeAndName which produces a multimaterial
+  // when source materials differ — `houseGlass` already has alpha=0.5, so the window stays
+  // translucent through the cut-away toggle as well.
+  function buildWindow(B, scene, name, size) {
+    const p = pal(scene);
+    const wall = B.MeshBuilder.CreateBox(name + "_wall", {
+      width: size.x, height: size.y, depth: size.z,
+    }, scene);
+    wall.material = p.houseWall;
+    wall.position.y = size.y / 2;
+
+    const winWidth = Math.min(3, size.x * 0.7);
+    const winHeight = Math.min(3.5, size.y * 0.45);
+    const winPlane = B.MeshBuilder.CreatePlane(name + "_win", {
+      width: winWidth, height: winHeight,
+    }, scene);
+    winPlane.material = p.houseGlass;
+    // Mid-height of the wall (a tasteful eye-level window).
+    winPlane.position.y = size.y / 2;
+    winPlane.position.z = -(size.z / 2 + 0.02);
+
+    const merged = mergeAndName(B, [wall, winPlane], name, scene);
+    if (merged) {
+      merged.metadata = merged.metadata || {};
+      merged.metadata.isWall = true;
+    }
+    return merged;
+  }
+
   // ---------- registry ----------
   const def = (x, y, z) => ({ x, y, z });
 
@@ -425,6 +530,51 @@
       build: (B, scene, name, size) => buildFenceSection(B, scene, name,
         resolveSize(size, def(6, 4, 0.15), def(2, 1, 0.05), def(20, 8, 0.5))),
     },
+    // Phase 6.0 — house primitives. Sizes default to standard residential proportions
+    // (12×12 ft floor slab, 8×8×0.5 ft wall, etc.) but every dimension is editable from the
+    // Resize panel. Floors anchor at Y=0; walls and door/window composites are also
+    // ground-anchored (origin at the midline of the wall's bottom edge), matching the rest
+    // of the library so app.js doesn't need a special branch for them.
+    "floor-slab": {
+      name: "Floor",
+      category: "House",
+      icon: "🟦",
+      defaultSize: def(12, 0.25, 12),
+      minSize:     def(2, 0.05, 2),
+      maxSize:     def(100, 1, 100),
+      build: (B, scene, name, size) => buildFloorSlab(B, scene, name,
+        resolveSize(size, def(12, 0.25, 12), def(2, 0.05, 2), def(100, 1, 100))),
+    },
+    "wall-segment": {
+      name: "Wall",
+      category: "House",
+      icon: "🧱",
+      defaultSize: def(8, 8, 0.5),
+      minSize:     def(1, 4, 0.25),
+      maxSize:     def(40, 12, 1.5),
+      build: (B, scene, name, size) => buildWallSegment(B, scene, name,
+        resolveSize(size, def(8, 8, 0.5), def(1, 4, 0.25), def(40, 12, 1.5))),
+    },
+    "door": {
+      name: "Door",
+      category: "House",
+      icon: "🚪",
+      defaultSize: def(4, 8, 0.5),
+      minSize:     def(2.5, 6, 0.25),
+      maxSize:     def(8, 10, 1.5),
+      build: (B, scene, name, size) => buildDoor(B, scene, name,
+        resolveSize(size, def(4, 8, 0.5), def(2.5, 6, 0.25), def(8, 10, 1.5))),
+    },
+    "window": {
+      name: "Window",
+      category: "House",
+      icon: "🪟",
+      defaultSize: def(4, 8, 0.5),
+      minSize:     def(2, 4, 0.25),
+      maxSize:     def(10, 10, 1.5),
+      build: (B, scene, name, size) => buildWindow(B, scene, name,
+        resolveSize(size, def(4, 8, 0.5), def(2, 4, 0.25), def(10, 10, 1.5))),
+    },
   };
 
   // List helper used by the picker UI — returns prefabs grouped by category in display order.
@@ -436,8 +586,9 @@
       if (!groups.has(cat)) groups.set(cat, []);
       groups.get(cat).push({ slug, ...def_ });
     }
-    // Stable category order: Beds, Pots, Structures, then anything else alphabetically.
-    const order = ["Beds", "Pots", "Structures"];
+    // Stable category order: House first (Phase 6.0 — composing the home is the primary new
+    // workflow), then garden categories in the original order, then anything else alphabetically.
+    const order = ["House", "Beds", "Pots", "Structures"];
     return [...groups.entries()].sort((a, b) => {
       const ai = order.indexOf(a[0]); const bi = order.indexOf(b[0]);
       if (ai !== -1 && bi !== -1) return ai - bi;
