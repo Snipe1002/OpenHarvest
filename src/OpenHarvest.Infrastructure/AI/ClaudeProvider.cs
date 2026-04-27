@@ -281,7 +281,16 @@ public class ClaudeProvider : IAiProvider
         {
             sb.AppendLine("  plantings:");
             foreach (var p in c.Plantings.Take(40))
-                sb.AppendLine($"    - {p.Name}{(p.CropRef is not null ? $" ({p.CropRef})" : "")}");
+            {
+                // Phase 5.3 — append a tag list when present so the model sees container/light
+                // hints alongside the crop name. Format mirrors the bullet style used elsewhere
+                // in the context block ("- Tomato (tomato) tags: [raised, south-facing]").
+                var crop = p.CropRef is not null ? $" ({p.CropRef})" : "";
+                var tags = (p.Tags is { Count: > 0 })
+                    ? $" tags: [{string.Join(", ", p.Tags)}]"
+                    : "";
+                sb.AppendLine($"    - {p.Name}{crop}{tags}");
+            }
         }
         return sb.ToString().TrimEnd();
     }

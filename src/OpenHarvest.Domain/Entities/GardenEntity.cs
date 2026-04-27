@@ -24,6 +24,15 @@ public class GardenEntity
     public Transform Transform { get; set; } = Transform.Identity;
     public Geometry Geometry { get; set; } = Geometry.Box(new Vector3(1, 1, 1));
 
+    /// <summary>
+    /// Phase 5.3 — free-form short string labels attached to this entity. Used by the AI advisor
+    /// to ground guidance ("raised", "south-facing", "high-water") and may be surfaced as filters
+    /// in future tooling. Stored as a Postgres text[] for cheap GIN indexing if/when we add a
+    /// "find all entities with tag X" query path. Not nullable: an entity without tags has an
+    /// empty array, so callers don't have to null-check before iterating.
+    /// </summary>
+    public string[] Tags { get; set; } = Array.Empty<string>();
+
     public DateTime CreatedUtc { get; set; }
     public DateTime ModifiedUtc { get; set; }
 

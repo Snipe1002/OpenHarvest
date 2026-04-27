@@ -200,6 +200,20 @@
   function disposeEntity(eid) {
     const rec = meshRegistry.get(eid);
     if (!rec) return;
+    // Phase 5.3 — detach children before disposing the parent. Babylon's Mesh.dispose() with
+    // default doNotRecurse=false would otherwise drag every parented child mesh into the
+    // grave, but those children are tracked separately in meshRegistry and getting recreated
+    // by an upsert/resize flow shouldn't take their pots and plants with them. Each child's
+    // mesh is reparented to scene root with its current absolutePosition preserved.
+    if (rec.mesh && !rec.mesh.isDisposed()) {
+      for (const [, child] of meshRegistry) {
+        if (child.mesh?.parent !== rec.mesh) continue;
+        child.mesh.computeWorldMatrix(true);
+        const ap = child.mesh.absolutePosition.clone();
+        child.mesh.parent = null;
+        child.mesh.position = ap;
+      }
+    }
     rec.label?.dispose();
     rec.mesh.dispose();
     meshRegistry.delete(eid);
@@ -211,6 +225,15 @@
     const scale = t.scale || { x: 1, y: 1, z: 1 };
     const geom = entity.geometry || {};
     const kind = geom.kind || "Box";
+
+    // Phase 5.3 — parent lookup. Server-side positions are world-space (no migration);
+    // when a parent mesh exists in the registry, we re-parent the child in Babylon and
+    // express its position relative to the parent. Babylon's TransformNode chain then
+    // makes children visually follow parent transforms during drag without per-child
+    // PATCHes mid-drag. If the parent isn't in the registry yet (race during initial
+    // load order), we fall back to world-space; the next applyEntityUpsert for this
+    // entity (or a manual rebuild) will re-attach.
+    const parentRec = entity.parentId ? meshRegistry.get(entity.parentId) : null;
 
     let mesh;
     let yOffset = 0;
@@ -254,9 +277,22 @@
         { width: size.x, height: size.y, depth: size.z }, scene);
       yOffset = size.y / 2;
     }
-    mesh.position = new BABYLON.Vector3(pos.x, pos.y + yOffset, pos.z);
+    // World-space target position (where the mesh should appear in the scene).
+    const worldX = pos.x;
+    const worldY = pos.y + yOffset;
+    const worldZ = pos.z;
+    if (parentRec && parentRec.mesh && !parentRec.mesh.isDisposed()) {
+      // Phase 5.3 — express the child's position in PARENT-LOCAL coordinates so Babylon's
+      // scene graph carries it through any future parent moves. parent.absolutePosition is
+      // the world-space anchor of the parent mesh; subtracting yields the local offset.
+      mesh.parent = parentRec.mesh;
+      const ap = parentRec.mesh.absolutePosition;
+      mesh.position = new BABYLON.Vector3(worldX - ap.x, worldY - ap.y, worldZ - ap.z);
+    } else {
+      mesh.position = new BABYLON.Vector3(worldX, worldY, worldZ);
+    }
     mesh.scaling = new BABYLON.Vector3(scale.x, scale.y, scale.z);
-    mesh.metadata = { entityId: entity.id, kind: entity.kind };
+    mesh.metadata = { entityId: entity.id, kind: entity.kind, yOffset };
     mesh.isPickable = true;
 
     if (assignDefaultMaterial) {
@@ -273,6 +309,24 @@
       label = makeLabel(entity.id, entity.name, mesh, geom);
     }
     meshRegistry.set(entity.id, { entity, mesh, label });
+
+    // Phase 5.3 — re-attach orphaned children. If this newly created mesh is the parent for
+    // any already-loaded children (load order can deliver children before their parent), pull
+    // each child back into the scene graph and convert its position into parent-local space
+    // so it ends up in the same world spot.
+    for (const [, childRec] of meshRegistry) {
+      if (childRec.entity?.parentId !== entity.id) continue;
+      if (!childRec.mesh || childRec.mesh.isDisposed()) continue;
+      if (childRec.mesh.parent === mesh) continue;
+      const childWorld = childRec.mesh.absolutePosition.clone();
+      childRec.mesh.parent = mesh;
+      const ap = mesh.absolutePosition;
+      childRec.mesh.position = new BABYLON.Vector3(
+        childWorld.x - ap.x,
+        childWorld.y - ap.y,
+        childWorld.z - ap.z,
+      );
+    }
     return mesh;
   }
 
@@ -568,9 +622,17 @@
     // way as raised beds. A future Phase could introduce a "Prefab" entity kind, but reusing
     // Bed lets the existing parent-of-plant logic work without a backend migration.
     const snapped = applySnapVec({ x: p.x, y: 0, z: p.z });
+    // Phase 5.3 — pots sit on top of shelves/beds; raised beds don't nest. The category is the
+    // cleanest discriminator since prefab slugs come and go. Pots get a Y-aware lookup so a pot
+    // placed near a tall shelf snaps to it; everything else is treated as a free-standing
+    // container (no auto-parent) — placing a raised bed inside another bed almost always means
+    // the user wants two adjacent beds, not a nested one.
+    const isPot = prefab.category === "Pots";
+    const parentId = isPot ? findContainerAt(p, { checkY: true }) : null;
     const body = {
       kind: "Bed",
       name: prefab.name,
+      parentId,
       transform: {
         position: snapped,
         rotation: { x: 0, y: 0, z: 0, w: 1 },
@@ -641,21 +703,46 @@
     modal.querySelector('[data-act="cancel"]').addEventListener("click", () => closeModal());
   }
 
-  function findContainingBed(p) {
+  // Phase 5.3 — generalized container lookup. Returns the entity id of the smallest container
+  // whose XZ footprint contains point p, optionally filtered by candidate predicate. "Smallest"
+  // wins on overlap so a pot ON a shelf parents to the pot, not the shelf. Y proximity is only
+  // checked when checkY is true (pot on shelf) — raised beds skip it because plants are placed
+  // at ground level inside a tall bed.
+  function findContainerAt(p, opts = {}) {
+    const { checkY = false, exclude = null } = opts;
+    let best = null;
+    let bestArea = Infinity;
     for (const [, rec] of meshRegistry) {
+      if (rec.entity.id === exclude) continue;
+      // Only Beds (semantic) are placeable containers today. Prefabs are stored with kind=Bed,
+      // so we don't need a kind=Prefab branch — geometry.kind === "Prefab" tells us if it's a
+      // prefab, but the container test only cares about footprint, not the visual subtype.
       if (rec.entity.kind !== "Bed") continue;
       const g = rec.entity.geometry;
       const t = rec.entity.transform;
-      if (!g?.size) continue;
-      const cx = t.position.x, cz = t.position.z;
-      const w = g.size.x, d = g.size.z;
-      if (p.x >= cx - w / 2 && p.x <= cx + w / 2 &&
-          p.z >= cz - d / 2 && p.z <= cz + d / 2) {
-        return rec.entity.id;
+      const size = g?.size;
+      if (!size) continue;
+      // Use the entity's stored world position. Plants snap to the bed's footprint at the
+      // moment of placement, so we don't need the live mesh position here.
+      const cx = t.position.x, cy = t.position.y, cz = t.position.z;
+      const w = size.x, h = size.y || 1, d = size.z;
+      if (p.x < cx - w / 2 || p.x > cx + w / 2) continue;
+      if (p.z < cz - d / 2 || p.z > cz + d / 2) continue;
+      if (checkY) {
+        // For "on top of" semantics (a pot on a shelf), require the click point to be near
+        // the top surface of the candidate container. Tolerance is generous: ±0.5 ft.
+        const top = cy + h;
+        if (Math.abs(p.y - top) > 0.5) continue;
       }
+      const area = w * d;
+      if (area < bestArea) { best = rec.entity.id; bestArea = area; }
     }
-    return null;
+    return best;
   }
+
+  // Back-compat shim for the plant placement flow. Plants always sit at ground level inside a
+  // bed footprint, so we don't need a Y check.
+  function findContainingBed(p) { return findContainerAt(p, { checkY: false }); }
 
   // ---------- plant autocomplete modal ----------
   let activeModal = null;
@@ -1029,11 +1116,13 @@
     camera.detachControl();
     mode = Mode.Move;
 
-    const origin = {
-      x: rec.mesh.position.x,
-      y: rec.mesh.position.y,
-      z: rec.mesh.position.z,
-    };
+    // Phase 5.3 — origin captures the WORLD position so cancel/commit/no-op-guard can compare
+    // against world coordinates regardless of whether the mesh is parented (and therefore
+    // expressing position in parent-local coords). Babylon refreshes absolutePosition lazily,
+    // so we computeWorldMatrix first to ensure a fresh value.
+    rec.mesh.computeWorldMatrix(true);
+    const ap = rec.mesh.absolutePosition;
+    const origin = { x: ap.x, y: ap.y, z: ap.z };
     let dragging = false;
     let committed = false;
 
@@ -1042,8 +1131,19 @@
       if (!p) return;
       // Phase 5.2.1: when snap is active, quantize live during the drag so the user gets
       // visible stair-step feedback against the chosen grid (not just on release).
-      rec.mesh.position.x = applySnap(p.x);
-      rec.mesh.position.z = applySnap(p.z);
+      // Phase 5.3: we always set WORLD coordinates here. For unparented meshes that's just
+      // mesh.position. For parented meshes (child of a bed/shelf) we convert to parent-local.
+      const worldX = applySnap(p.x);
+      const worldZ = applySnap(p.z);
+      if (rec.mesh.parent) {
+        rec.mesh.parent.computeWorldMatrix(true);
+        const pap = rec.mesh.parent.absolutePosition;
+        rec.mesh.position.x = worldX - pap.x;
+        rec.mesh.position.z = worldZ - pap.z;
+      } else {
+        rec.mesh.position.x = worldX;
+        rec.mesh.position.z = worldZ;
+      }
     };
 
     const cleanup = () => {
@@ -1054,11 +1154,23 @@
       mode = Mode.Idle;
     };
 
+    // Phase 5.3 — small helper: write world (X, Z) onto rec.mesh, accounting for parent if any.
+    const setMeshWorldXZ = (worldX, worldZ) => {
+      if (rec.mesh.parent) {
+        rec.mesh.parent.computeWorldMatrix(true);
+        const pap = rec.mesh.parent.absolutePosition;
+        rec.mesh.position.x = worldX - pap.x;
+        rec.mesh.position.z = worldZ - pap.z;
+      } else {
+        rec.mesh.position.x = worldX;
+        rec.mesh.position.z = worldZ;
+      }
+    };
+
     const cancel = () => {
       if (committed) return;
       committed = true;
-      rec.mesh.position.x = origin.x;
-      rec.mesh.position.z = origin.z;
+      setMeshWorldXZ(origin.x, origin.z);
       cleanup();
       setStatus("move cancelled");
     };
@@ -1067,7 +1179,16 @@
       if (committed) return;
       committed = true;
       cleanup();
-      const newPos = { x: rec.mesh.position.x, y: 0, z: rec.mesh.position.z };
+      // Phase 5.3 — when the moved entity is a parent, Babylon has already pulled the children
+      // along (their meshes are reparented in the scene graph), so each child's world position
+      // is now updated. We need to PATCH each child too: the server stores world-space, and a
+      // reload would otherwise re-render children at their OLD world positions while the
+      // parent sits at the NEW one. We snapshot the dragged mesh's new WORLD position here
+      // via absolutePosition so the value is correct whether or not rec.mesh itself is
+      // parented (you can grab a child pot and drag it inside its bed).
+      rec.mesh.computeWorldMatrix(true);
+      const newAp = rec.mesh.absolutePosition;
+      const newPos = { x: newAp.x, y: 0, z: newAp.z };
       // No-op guard: if the user tapped without actually dragging, skip the PATCH.
       const dx = newPos.x - origin.x;
       const dz = newPos.z - origin.z;
@@ -1084,9 +1205,41 @@
           },
         });
         rec.entity = updated;
+
+        // Phase 5.3 — propagate the parent's move to its children's stored world positions.
+        // The children's meshes already moved (parented in the scene graph), so we read each
+        // child's absolutePosition and PATCH it back as the new world transform. Y is
+        // recovered from the entity's previous y minus the prefab yOffset so we don't double-
+        // shift labels and meshes whose anchor y differs from the stored entity y.
+        const children = [];
+        for (const [, child] of meshRegistry) {
+          if (child.entity?.parentId === eid) children.push(child);
+        }
+        await Promise.all(children.map(async (child) => {
+          const ap = child.mesh.absolutePosition;
+          const yOffset = child.mesh.metadata?.yOffset ?? 0;
+          const newChildPos = { x: ap.x, y: ap.y - yOffset, z: ap.z };
+          try {
+            const childUpdated = await Api.updateEntity(gardenId, child.entity.id, {
+              transform: {
+                position: newChildPos,
+                rotation: { x: 0, y: 0, z: 0, w: 1 },
+                scale: child.entity.transform?.scale || { x: 1, y: 1, z: 1 },
+              },
+            });
+            child.entity = childUpdated;
+            if (selectedEntityId === child.entity.id) renderToolbar(childUpdated);
+          } catch (childErr) {
+            console.warn("child PATCH failed", child.entity.id, childErr);
+          }
+        }));
+
         // Phase 5.2.1: refresh the toolbar's position chip if this is the selected entity.
         if (selectedEntityId === eid) renderToolbar(updated);
-        setStatus(`moved to ${formatPos(newPos)}`);
+        const childCount = children.length;
+        setStatus(childCount > 0
+          ? `moved to ${formatPos(newPos)} (+ ${childCount} child${childCount === 1 ? "" : "ren"})`
+          : `moved to ${formatPos(newPos)}`);
       } catch (e) {
         console.error(e);
         // Snap back on server failure so client state matches truth.
@@ -1226,6 +1379,146 @@
     setTimeout(() => { wInput.focus(); wInput.select(); }, 50);
   }
 
+  // ---------- Phase 5.3 tags ----------
+  // Curated typeahead pool for the Tags modal. Kept short and grounded in things gardening
+  // guidance actually keys on (light / container / soil / care / intent). The user can still
+  // type anything not in this list.
+  const TAG_SUGGESTIONS = [
+    // Light/sun
+    "full-sun", "partial-shade", "full-shade",
+    "south-facing", "north-facing", "east-facing", "west-facing",
+    // Container type
+    "raised", "in-ground", "container", "indoor", "vertical",
+    "balcony", "patio", "windowsill", "greenhouse",
+    // Soil/water
+    "high-water", "low-water", "drought-tolerant",
+    "rich-soil", "poor-soil", "acidic", "alkaline",
+    // Care
+    "high-maintenance", "low-maintenance",
+    // User intent
+    "experimental", "favorite", "heirloom", "annual", "perennial",
+  ];
+
+  // Normalize a tag the same way the server does so the chip count + suggestions stay in
+  // sync with what's persisted.
+  function normalizeTag(s) {
+    if (!s) return "";
+    return String(s).trim();
+  }
+
+  function openTagsModal(eid) {
+    const rec = meshRegistry.get(eid);
+    if (!rec) return;
+    closeModal();
+    let workingTags = Array.isArray(rec.entity.tags) ? [...rec.entity.tags] : [];
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.innerHTML = `
+      <h2>🏷 Tags for ${escapeHtml(rec.entity.name || "this entity")}</h2>
+      <div class="tags-chips" data-chips></div>
+      <div class="tags-input-row">
+        <input type="text" placeholder="Add a tag (e.g. raised, south-facing)..." autocomplete="off" />
+        <button data-act="add">+ Add</button>
+      </div>
+      <div class="tags-suggest" data-suggest></div>
+      <div class="ai-meta" style="margin-top:8px;">Tags feed into the AI advisor for sharper guidance.</div>
+      <div class="modal-actions">
+        <button data-act="cancel">Cancel</button>
+        <button class="primary" data-act="save">Save</button>
+      </div>
+    `;
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    activeModal = backdrop;
+
+    const chipsEl = modal.querySelector('[data-chips]');
+    const suggestEl = modal.querySelector('[data-suggest]');
+    const input = modal.querySelector('input');
+
+    const renderChips = () => {
+      chipsEl.innerHTML = "";
+      if (workingTags.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "tags-empty";
+        empty.textContent = "No tags yet. Add tags to sharpen AI guidance.";
+        chipsEl.appendChild(empty);
+        return;
+      }
+      workingTags.forEach((t, i) => {
+        const chip = document.createElement("span");
+        chip.className = "tags-chip";
+        chip.innerHTML = `<span>${escapeHtml(t)}</span><span class="x" title="Remove">×</span>`;
+        chip.querySelector(".x").addEventListener("click", () => {
+          workingTags.splice(i, 1);
+          renderChips();
+          renderSuggest();
+        });
+        chipsEl.appendChild(chip);
+      });
+    };
+
+    const renderSuggest = () => {
+      suggestEl.innerHTML = "";
+      const have = new Set(workingTags.map(t => t.toLowerCase()));
+      const q = input.value.trim().toLowerCase();
+      const pool = TAG_SUGGESTIONS.filter(t => !have.has(t.toLowerCase()));
+      const filtered = q ? pool.filter(t => t.toLowerCase().includes(q)) : pool;
+      filtered.slice(0, 24).forEach(t => {
+        const chip = document.createElement("span");
+        chip.className = "tags-suggest-chip";
+        chip.textContent = t;
+        chip.addEventListener("click", () => {
+          workingTags.push(t);
+          input.value = "";
+          renderChips();
+          renderSuggest();
+        });
+        suggestEl.appendChild(chip);
+      });
+    };
+
+    const addCurrent = () => {
+      const v = normalizeTag(input.value);
+      if (!v) return;
+      const exists = workingTags.some(t => t.toLowerCase() === v.toLowerCase());
+      if (!exists) workingTags.push(v);
+      input.value = "";
+      renderChips();
+      renderSuggest();
+    };
+
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") { addCurrent(); ev.preventDefault(); }
+      else if (ev.key === "Escape") closeModal();
+    });
+    input.addEventListener("input", renderSuggest);
+    modal.querySelector('[data-act="add"]').addEventListener("click", addCurrent);
+
+    const save = async () => {
+      // Treat "what was on the chip strip when Save was tapped" as canonical. Send even when
+      // empty — that's the "user cleared all tags" case the server treats as meaningful.
+      closeModal();
+      try {
+        const updated = await Api.updateEntity(gardenId, eid, { tags: workingTags });
+        rec.entity = updated;
+        if (selectedEntityId === eid) renderToolbar(updated);
+        const n = workingTags.length;
+        setStatus(n === 0 ? "tags cleared" : `saved ${n} tag${n === 1 ? "" : "s"}`);
+      } catch (e) { console.error(e); setStatus("tag save failed"); }
+    };
+
+    backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) closeModal(); });
+    modal.querySelector('[data-act="cancel"]').addEventListener("click", () => closeModal());
+    modal.querySelector('[data-act="save"]').addEventListener("click", save);
+
+    renderChips();
+    renderSuggest();
+    setTimeout(() => input.focus(), 50);
+  }
+
   // ---------- Phase 5.2.1 selection + slim toolbar ----------
   // selectEntity/clearSelection are the single entry points for changing what's in the
   // toolbar. They own the Babylon outline state so highlight + toolbar never drift apart.
@@ -1305,6 +1598,16 @@
     resizeBtn.title = canResize ? "Resize" : "Plants don't have a size editor";
     if (canResize) resizeBtn.addEventListener("click", () => openResizeModal(eid));
     fresh.querySelector('[data-act="move"]').addEventListener("click", () => startMove(eid));
+    // Phase 5.3 — tags. Display the count next to the icon so a glance tells the user whether
+    // any tags exist; opens the tag editor on tap.
+    const tagsBtn = fresh.querySelector('[data-act="tags"]');
+    if (tagsBtn) {
+      const tagCount = (entity.tags?.length || 0);
+      const countEl = tagsBtn.querySelector('.tb-tags-count');
+      if (countEl) countEl.textContent = tagCount > 0 ? ` ${tagCount}` : "";
+      tagsBtn.title = tagCount > 0 ? `Tags (${tagCount})` : "Tags";
+      tagsBtn.addEventListener("click", () => openTagsModal(eid));
+    }
     fresh.querySelector('[data-act="duplicate"]').addEventListener("click", () => duplicateEntityById(eid));
     fresh.querySelector('[data-act="delete"]').addEventListener("click", () => deleteEntityById(eid));
 
@@ -1334,6 +1637,8 @@
         scale: entity.transform?.scale || { x: 1, y: 1, z: 1 },
       },
       geometry: entity.geometry,
+      // Phase 5.3 — propagate tags on duplicate so the user doesn't have to re-tag a copy.
+      tags: Array.isArray(entity.tags) ? [...entity.tags] : [],
     };
     try {
       const created = await Api.addEntity(gardenId, body);

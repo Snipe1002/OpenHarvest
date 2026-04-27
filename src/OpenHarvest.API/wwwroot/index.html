@@ -423,6 +423,63 @@
     .prefab-tile:hover, .prefab-tile:active { background: var(--panel-hover); border-color: var(--accent); }
     .prefab-tile .icon { font-size: 32px; line-height: 1; }
     .prefab-tile .label { font-size: 12px; color: var(--text); }
+
+    /* Phase 5.3: tag chips. Used inside the Tags modal for the "currently attached" pills and
+       for the typeahead suggestion strip below the input. */
+    #toolbar .tb-tags-count {
+      font-size: 11px; color: var(--accent); font-weight: 600;
+      margin-left: 2px;
+    }
+    .tags-chips {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      min-height: 36px;
+      padding: 6px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-top: 8px;
+    }
+    .tags-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 4px 8px;
+      font-size: 12px;
+      background: var(--panel-hover);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+    }
+    .tags-chip .x {
+      cursor: pointer; color: var(--text-dim);
+      width: 14px; height: 14px; line-height: 14px; text-align: center;
+      border-radius: 50%;
+    }
+    .tags-chip .x:hover { background: var(--danger); color: var(--bg); }
+    .tags-empty {
+      color: var(--text-dim); font-size: 12px;
+      padding: 6px 4px;
+    }
+    .tags-input-row {
+      display: flex; gap: 6px; margin-top: 8px;
+    }
+    .tags-input-row input { flex: 1; }
+    .tags-input-row button {
+      padding: 0 14px; font-size: 14px;
+      background: var(--panel); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px;
+      cursor: pointer;
+    }
+    .tags-input-row button:hover { background: var(--panel-hover); border-color: var(--accent); }
+    .tags-suggest {
+      display: flex; flex-wrap: wrap; gap: 4px;
+      margin-top: 6px;
+      max-height: 110px; overflow-y: auto;
+    }
+    .tags-suggest-chip {
+      cursor: pointer; padding: 3px 8px; font-size: 11px;
+      background: transparent; color: var(--text-dim);
+      border: 1px dashed var(--border); border-radius: 999px;
+    }
+    .tags-suggest-chip:hover { color: var(--accent); border-color: var(--accent); }
   </style>
 </head>
 <body>
@@ -466,6 +523,8 @@
       <button data-act="diagnose" title="Diagnose">🔍</button>
       <button data-act="resize" title="Resize">📐</button>
       <button data-act="move" title="Move">🚚</button>
+      <!-- Phase 5.3: tags. Shows the count when present, just the icon otherwise. -->
+      <button data-act="tags" title="Tags">🏷<span class="tb-tags-count"></span></button>
       <button data-act="duplicate" title="Duplicate">📋</button>
       <button data-act="delete" class="danger" title="Delete">🗑</button>
     </span>
