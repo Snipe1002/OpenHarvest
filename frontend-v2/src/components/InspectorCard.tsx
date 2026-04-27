@@ -16,8 +16,14 @@
  */
 import { useEffect, useState } from 'react'
 import { Html } from '@react-three/drei'
-import { ApiError, deleteEntity, updateEntity } from '../api/client'
-import type { GardenEntity, Geometry, Quaternion, Transform } from '../api/types'
+import { ApiError, createEntity, deleteEntity, updateEntity } from '../api/client'
+import type {
+  CreateEntityRequest,
+  GardenEntity,
+  Geometry,
+  Quaternion,
+  Transform,
+} from '../api/types'
 import { useGarden } from '../store/garden'
 
 const PILL_STYLE: React.CSSProperties = {
@@ -260,6 +266,39 @@ export default function InspectorCard() {
     void patch({ ...entity, transform: nextTransform }, { transform: nextTransform })
   }
 
+  const onDuplicate = async () => {
+    // Build a CreateEntityRequest matching the source entity's shape, with
+    // the position offset by 0.5m on X so the duplicate doesn't z-fight.
+    const body: CreateEntityRequest = {
+      kind: entity.kind,
+      name: entity.name ? `${entity.name} (copy)` : undefined,
+      transform: {
+        ...entity.transform,
+        position: {
+          x: entity.transform.position.x + 0.5,
+          y: entity.transform.position.y,
+          z: entity.transform.position.z,
+        },
+      },
+      geometry: entity.geometry,
+      tags: entity.tags ?? [],
+    }
+    try {
+      const created = await createEntity(gardenId, body)
+      addOrUpdateEntity(created)
+      selectEntity(created.id) // jump selection to the new copy
+    } catch (err) {
+      const msg =
+        err instanceof ApiError
+          ? `Duplicate failed (${err.status})`
+          : err instanceof Error
+            ? err.message
+            : 'Duplicate failed'
+      setToast(msg)
+      console.error('[InspectorCard] duplicate failed', err)
+    }
+  }
+
   const onDelete = async () => {
     if (!confirmingDelete) {
       setConfirmingDelete(true)
@@ -325,13 +364,17 @@ export default function InspectorCard() {
       // Stop drei from styling its wrapper; we set pointerEvents on children.
     >
       <div
-        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0 }}
+        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}
         onPointerDown={(e) => e.stopPropagation()}
       >
+        {/* Action row: type label + buttons */}
         <div style={PILL_STYLE}>
           <span style={{ fontSize: 11, padding: '0 4px', color: '#bbb' }}>{typeLabel(entity)}</span>
           <button style={ICON_BUTTON} onClick={onRotate} title="Rotate 90°">
             ⟳
+          </button>
+          <button style={ICON_BUTTON} onClick={onDuplicate} title="Duplicate">
+            📋
           </button>
           <button
             style={confirmingDelete ? DELETE_CONFIRM : DELETE_BUTTON}
@@ -344,7 +387,7 @@ export default function InspectorCard() {
           <button
             style={{ ...ICON_BUTTON, background: expanded ? '#444' : ICON_BUTTON.background }}
             onClick={() => setExpanded((v) => !v)}
-            title="Edit details"
+            title="Edit size details"
           >
             ⋯
           </button>
@@ -357,20 +400,21 @@ export default function InspectorCard() {
           </button>
         </div>
 
-        {expanded && (
+        {/* Position row — always visible. This is the translate UX. */}
+        <div style={PILL_STYLE}>
+          <span style={TINY_LABEL}>Pos</span>
+          <NumberField label="X" value={entity.transform.position.x} onCommit={(n) => updatePosition('x', n)} />
+          <NumberField label="Y" value={entity.transform.position.y} onCommit={(n) => updatePosition('y', n)} />
+          <NumberField label="Z" value={entity.transform.position.z} onCommit={(n) => updatePosition('z', n)} />
+        </div>
+
+        {/* Detail row — collapsible (size only — position is above). */}
+        {expanded && renderSizeRow() && (
           <div style={DETAIL_STYLE}>
             <div style={ROW_STYLE}>
-              <span style={TINY_LABEL}>Pos</span>
-              <NumberField label="X" value={entity.transform.position.x} onCommit={(n) => updatePosition('x', n)} />
-              <NumberField label="Y" value={entity.transform.position.y} onCommit={(n) => updatePosition('y', n)} />
-              <NumberField label="Z" value={entity.transform.position.z} onCommit={(n) => updatePosition('z', n)} />
+              <span style={TINY_LABEL}>Size</span>
+              {renderSizeRow()}
             </div>
-            {renderSizeRow() && (
-              <div style={ROW_STYLE}>
-                <span style={TINY_LABEL}>Size</span>
-                {renderSizeRow()}
-              </div>
-            )}
           </div>
         )}
       </div>
