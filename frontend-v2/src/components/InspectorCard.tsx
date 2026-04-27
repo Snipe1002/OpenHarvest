@@ -302,6 +302,8 @@ export default function InspectorCard() {
   const onDuplicate = async () => {
     // Build a CreateEntityRequest matching the source entity's shape, with
     // the position offset by 0.5m on X so the duplicate doesn't z-fight.
+    // After creating, jump selection to the new copy AND auto-enter translate
+    // mode so the user can immediately drag it without a separate ⇄ tap.
     const body: CreateEntityRequest = {
       kind: entity.kind,
       name: entity.name ? `${entity.name} (copy)` : undefined,
@@ -320,6 +322,7 @@ export default function InspectorCard() {
       const created = await createEntity(gardenId, body)
       addOrUpdateEntity(created)
       selectEntity(created.id) // jump selection to the new copy
+      setTranslateMode(created.id) // auto-enter translate so user can immediately drag
     } catch (err) {
       const msg =
         err instanceof ApiError

@@ -14,6 +14,7 @@ import type { Units } from './unitsHelpers'
 
 const STORAGE_KEY = 'openharvest:v2:currentGardenId'
 const SNAP_STORAGE_KEY = 'openharvest:v2:snap'
+const SNAP_MODE_STORAGE_KEY = 'openharvest:v2:snapMode'
 const STICKY_STORAGE_KEY = 'openharvest:v2:stickyPlacement'
 const MULTI_STORAGE_KEY = 'openharvest:v2:multiSelectMode'
 const UNITS_STORAGE_KEY = 'openharvest:v2:units'
@@ -76,6 +77,36 @@ function writePersistedSnap(v: SnapValue): void {
   try {
     if (v === null) window.localStorage.removeItem(SNAP_STORAGE_KEY)
     else window.localStorage.setItem(SNAP_STORAGE_KEY, String(v))
+  } catch {
+    /* no-op */
+  }
+}
+
+/**
+ * Snap MODE controls how snap is applied during translate.
+ *  - 'edge': edges of dragged entity snap relative to neighbors' edges with
+ *            `snap` as the gap. Avoids overlaps when arranging objects of
+ *            non-zero size next to each other.
+ *  - 'center': dragged entity's center quantizes to a fixed world grid of
+ *              `snap` units. Original behavior; useful for laying things out
+ *              on absolute coordinates.
+ */
+export type SnapMode = 'edge' | 'center'
+
+function readPersistedSnapMode(): SnapMode {
+  if (typeof window === 'undefined') return 'edge'
+  try {
+    const v = window.localStorage.getItem(SNAP_MODE_STORAGE_KEY)
+    return v === 'center' ? 'center' : 'edge'
+  } catch {
+    return 'edge'
+  }
+}
+
+function writePersistedSnapMode(v: SnapMode): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(SNAP_MODE_STORAGE_KEY, v)
   } catch {
     /* no-op */
   }
@@ -224,6 +255,12 @@ export interface GardenState {
    */
   snap: SnapValue
 
+  /**
+   * Snap mode — 'edge' (default, magnet to neighbor edges with `snap` gap)
+   * or 'center' (quantize entity center to a fixed world grid). Persisted.
+   */
+  snapMode: SnapMode
+
   /** Active house-element placement mode, or null. */
   housePlacement: HousePlacementState | null
 
@@ -291,6 +328,8 @@ export interface GardenState {
   setGroupTranslateActive: (v: boolean) => void
   /** Set the snap value, persist to localStorage. */
   setSnap: (v: SnapValue) => void
+  /** Toggle / set snap mode (edge ↔ center), persist to localStorage. */
+  setSnapMode: (v: SnapMode) => void
   /** Enter / update / exit house-element placement. */
   setHousePlacement: (p: HousePlacementState | null) => void
   /** Select / clear a Pascal wall (separate from garden entity selection). */
@@ -320,6 +359,7 @@ export const useGarden = create<GardenState>((set, get) => ({
   translateModeId: null,
   groupTranslateActive: false,
   snap: readPersistedSnap(),
+  snapMode: readPersistedSnapMode(),
   housePlacement: null,
   selectedWallId: null,
   stickyPlacement: readPersistedSticky(),
@@ -497,6 +537,11 @@ export const useGarden = create<GardenState>((set, get) => ({
   setSnap: (v) => {
     writePersistedSnap(v)
     set({ snap: v })
+  },
+
+  setSnapMode: (v) => {
+    writePersistedSnapMode(v)
+    set({ snapMode: v })
   },
 
   setHousePlacement: (p) => {

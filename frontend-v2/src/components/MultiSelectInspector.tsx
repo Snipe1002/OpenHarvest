@@ -324,6 +324,9 @@ export default function MultiSelectInspector() {
       )
       for (const c of created) addOrUpdateEntity(c)
       selectEntities(created.map((c) => c.id))
+      // Auto-enter group translate so the user can immediately drag the new
+      // copies as a group without an extra ⇄ tap.
+      setGroupTranslateActive(true)
     } catch (err) {
       const msg =
         err instanceof ApiError
