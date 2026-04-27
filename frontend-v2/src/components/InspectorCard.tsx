@@ -132,6 +132,22 @@ function typeLabel(entity: GardenEntity): string {
   }
 }
 
+/**
+ * Resolve a friendly label for the entity's parent — preferring the catalog's
+ * `displayName` when the parent is a prefab, falling back to the parent's
+ * own type label. Returns null when the parent isn't loaded yet (in which
+ * case we just hide the chip rather than show "child of …").
+ */
+function parentLabel(
+  parent: GardenEntity | null,
+  catalog: ReturnType<typeof useGarden.getState>['prefabCatalog'],
+): string | null {
+  if (!parent) return null
+  const slug = parent.geometry.prefabRef
+  if (slug && catalog?.[slug]?.displayName) return catalog[slug].displayName
+  return typeLabel(parent)
+}
+
 function rotateY90(q: Quaternion): Quaternion {
   const s = Math.SQRT1_2
   const x = s * q.x + s * q.z
@@ -219,6 +235,12 @@ export default function InspectorCard() {
     s.selectedEntityIds.length === 1 ? s.selectedEntityIds[0] : null,
   )
   const entity = useGarden((s) => (selectedId ? s.entities[selectedId] ?? null : null))
+  // Parent lookup: subscribed separately so the chip updates if the user
+  // re-parents (or the parent disappears) without re-rendering the whole pill.
+  const parent = useGarden((s) =>
+    entity?.parentId ? s.entities[entity.parentId] ?? null : null,
+  )
+  const prefabCatalog = useGarden((s) => s.prefabCatalog)
   const gardenId = useGarden((s) => s.currentGardenId)
   const setToast = useGarden((s) => s.setToast)
   const clearSelection = useGarden((s) => s.clearSelection)
@@ -419,9 +441,17 @@ export default function InspectorCard() {
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Action row: type label + buttons */}
+        {/* Action row: type label + (optional) parent chip + buttons */}
         <div style={PILL_STYLE}>
           <span style={{ fontSize: 11, padding: '0 4px', color: '#bbb' }}>{typeLabel(entity)}</span>
+          {parent && (
+            <span
+              style={{ fontSize: 10, padding: '0 4px', color: '#888' }}
+              title={`Parented to ${parent.id}`}
+            >
+              child of {parentLabel(parent, prefabCatalog) ?? 'parent'}
+            </span>
+          )}
           <button style={ICON_BUTTON} onClick={onRotate} title="Rotate 90°">
             ⟳
           </button>

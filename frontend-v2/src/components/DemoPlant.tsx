@@ -14,7 +14,7 @@
  * stem base (y = ground at the plant's location).
  */
 import * as THREE from 'three'
-import { useMemo } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { Outlines } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import type { GardenEntity, Quaternion } from '../api/types'
@@ -29,6 +29,9 @@ function quaternionToEuler(q: Quaternion): [number, number, number] {
 
 interface DemoPlantProps {
   entity: GardenEntity
+  /** Hierarchical children mounted inside the plant's transform group. Plants
+   *  rarely host children today, but kept for symmetry with other primitives. */
+  children?: ReactNode
 }
 
 const DEFAULT_HEIGHT = 0.4
@@ -49,7 +52,7 @@ function resolveHeight(entity: GardenEntity): number {
   return DEFAULT_HEIGHT
 }
 
-export default function DemoPlant({ entity }: DemoPlantProps) {
+export default function DemoPlant({ entity, children }: DemoPlantProps) {
   const selectEntity = useGarden((s) => s.selectEntity)
   const isSelected = useGarden((s) => s.selectedEntityIds.includes(entity.id))
   const isMultiSelected = useGarden(
@@ -157,6 +160,7 @@ export default function DemoPlant({ entity }: DemoPlantProps) {
           side={THREE.DoubleSide}
         />
       </mesh>
+      {children}
     </group>
   )
 }
