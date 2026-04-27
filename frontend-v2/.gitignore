@@ -4,3 +4,9 @@ dist
 vite.config.d.ts
 vite.config.js
 .DS_Store
+
+# Playwright
+/test-results/
+/playwright-report/
+/playwright/.cache/
+/tests/artifacts/

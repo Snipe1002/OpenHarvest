@@ -33,6 +33,17 @@ function writePersistedGardenId(id: Guid | null): void {
   }
 }
 
+/**
+ * Active "place new entity" mode. `null` when not placing. Toolbar buttons
+ * set this; the ground click handler reads it to decide what to POST.
+ */
+export type PlacementType = 'bed' | 'plant' | 'prefab'
+export interface PlacementState {
+  type: PlacementType
+  /** Required when type === 'prefab'. Identifies which prefab catalog entry to spawn. */
+  prefabSlug?: string | null
+}
+
 export interface GardenState {
   currentGardenId: Guid | null
   garden: Garden | null
@@ -41,6 +52,13 @@ export interface GardenState {
   nudges: Nudge[]
   loading: boolean
   error: string | null
+
+  /** Currently selected entity id, or null. Drives the edit panel + outline. */
+  selectedEntityId: Guid | null
+  /** Current placement mode (toolbar +Bed / +Plant / +Prefab) or null. */
+  placement: PlacementState | null
+  /** Transient error string surfaced as a toast in the edit panel. */
+  toast: string | null
 
   /** Switch active garden, persist id, fetch garden + entities, replace state. */
   setCurrentGarden: (id: Guid) => Promise<void>
@@ -52,6 +70,15 @@ export interface GardenState {
   addNudge: (n: Nudge) => void
   /** Drop a nudge by entityId. (Nudges don't have their own id on the wire.) */
   clearNudge: (entityId: Guid) => void
+
+  /** Set or clear the selected entity. */
+  selectEntity: (id: Guid | null) => void
+  /** Look up the selected entity (or null if none / not present). */
+  getSelected: () => GardenEntity | null
+  /** Enter / exit placement mode. Pass null to exit. */
+  setPlacement: (p: PlacementState | null) => void
+  /** Set the transient toast message. */
+  setToast: (msg: string | null) => void
 }
 
 export const useGarden = create<GardenState>((set, get) => ({
@@ -61,6 +88,9 @@ export const useGarden = create<GardenState>((set, get) => ({
   nudges: [],
   loading: false,
   error: null,
+  selectedEntityId: null,
+  placement: null,
+  toast: null,
 
   setCurrentGarden: async (id) => {
     if (!id) return
@@ -72,6 +102,8 @@ export const useGarden = create<GardenState>((set, get) => ({
       garden: null,
       entities: {},
       nudges: [],
+      selectedEntityId: null,
+      placement: null,
     })
     writePersistedGardenId(id)
 
@@ -99,7 +131,9 @@ export const useGarden = create<GardenState>((set, get) => ({
       if (!(id in s.entities)) return s
       const next = { ...s.entities }
       delete next[id]
-      return { entities: next }
+      // If the removed entity was selected, drop the selection too.
+      const selectedEntityId = s.selectedEntityId === id ? null : s.selectedEntityId
+      return { entities: next, selectedEntityId }
     })
   },
 
@@ -109,5 +143,23 @@ export const useGarden = create<GardenState>((set, get) => ({
 
   clearNudge: (entityId) => {
     set((s) => ({ nudges: s.nudges.filter((n) => n.entityId !== entityId) }))
+  },
+
+  selectEntity: (id) => {
+    set({ selectedEntityId: id })
+  },
+
+  getSelected: () => {
+    const { selectedEntityId, entities } = get()
+    if (!selectedEntityId) return null
+    return entities[selectedEntityId] ?? null
+  },
+
+  setPlacement: (p) => {
+    set({ placement: p })
+  },
+
+  setToast: (msg) => {
+    set({ toast: msg })
   },
 }))

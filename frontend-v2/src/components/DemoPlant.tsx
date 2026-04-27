@@ -14,7 +14,10 @@
  * stem base (y = ground at the plant's location).
  */
 import * as THREE from 'three'
+import { Outlines } from '@react-three/drei'
+import type { ThreeEvent } from '@react-three/fiber'
 import type { GardenEntity } from '../api/types'
+import { useGarden } from '../store/garden'
 
 interface DemoPlantProps {
   entity: GardenEntity
@@ -39,18 +42,27 @@ function resolveHeight(entity: GardenEntity): number {
 }
 
 export default function DemoPlant({ entity }: DemoPlantProps) {
+  const selectEntity = useGarden((s) => s.selectEntity)
+  const isSelected = useGarden((s) => s.selectedEntityId === entity.id)
+
   const { x: px, y: py, z: pz } = entity.transform.position
   const stemHeight = resolveHeight(entity)
   // Leaves scale with stem height so a tall plant doesn't look stunted.
   const leafSize = Math.min(0.4, Math.max(0.1, stemHeight * 0.5))
   const stemRadius = Math.max(0.015, Math.min(0.04, stemHeight * 0.05))
 
+  const handleSelect = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation()
+    selectEntity(entity.id)
+  }
+
   return (
-    <group position={[px, py, pz]}>
+    <group position={[px, py, pz]} onPointerDown={handleSelect}>
       {/* Stem */}
       <mesh position={[0, stemHeight / 2, 0]} castShadow>
         <cylinderGeometry args={[stemRadius, stemRadius, stemHeight, 8]} />
         <meshStandardMaterial color="#4a8a3a" roughness={0.8} metalness={0} />
+        {isSelected && <Outlines thickness={4} color="#ffaa00" />}
       </mesh>
       {/* Leaf 1 */}
       <mesh position={[leafSize / 2, stemHeight * 0.85, 0]} rotation={[0, 0, Math.PI / 6]} castShadow>

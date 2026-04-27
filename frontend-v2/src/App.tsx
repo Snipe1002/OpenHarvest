@@ -1,7 +1,9 @@
 import { useEffect } from 'react'
 import { Viewer } from '@pascal-app/viewer'
 import { CameraControls } from '@react-three/drei'
+import AddToolbar from './components/AddToolbar'
 import DemoGround from './components/DemoGround'
+import EditPanel from './components/EditPanel'
 import EntityRenderer from './components/EntityRenderer'
 import SampleBuilding from './components/SampleBuilding'
 import { listGardenIds } from './api/client'
@@ -75,6 +77,9 @@ export default function App() {
           <EntityRenderer key={e.id} entity={e} />
         ))}
       </Viewer>
+      {/* HTML overlays — siblings of the Viewer canvas, not R3F children. */}
+      <AddToolbar />
+      <EditPanel />
     </div>
   )
 }
