@@ -26,14 +26,50 @@
  * House section can wrap to a second line below the Garden section without
  * overflowing. Both sections retain their internal layout in either case.
  */
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
+import { listPrefabs, type PrefabCatalog, type PrefabSpec } from '../api/prefabs'
 import {
   useGarden,
   type HousePlacementType,
   type PlacementType,
 } from '../store/garden'
 
-const PREFAB_SLUGS: string[] = ['terracotta-pot', 'tomato-cage']
+/**
+ * Categories shown in the user-facing prefab picker. `plant` is excluded —
+ * plants get their own "+ Plant" button. Anything else from the catalog is
+ * surfaced under its own group header for readability.
+ */
+const PICKER_CATEGORIES: ReadonlyArray<PrefabSpec['category']> = [
+  'container',
+  'fixture',
+  'decoration',
+]
+
+interface PickerEntry {
+  slug: string
+  spec: PrefabSpec
+}
+
+/** Group catalog entries by category, preserving the iteration order of
+ * {@link PICKER_CATEGORIES}. Slugs within a group are alphabetized for stable
+ * UI ordering across renders. Returns an empty array if the catalog is null. */
+function buildPickerGroups(
+  catalog: PrefabCatalog | null,
+): Array<{ category: PrefabSpec['category']; entries: PickerEntry[] }> {
+  if (!catalog) return []
+  const groups = new Map<PrefabSpec['category'], PickerEntry[]>()
+  for (const cat of PICKER_CATEGORIES) groups.set(cat, [])
+  for (const [slug, spec] of listPrefabs(catalog)) {
+    const bucket = groups.get(spec.category)
+    if (bucket) bucket.push({ slug, spec })
+  }
+  for (const [, list] of groups) {
+    list.sort((a, b) => a.spec.displayName.localeCompare(b.spec.displayName))
+  }
+  return [...groups.entries()]
+    .filter(([, list]) => list.length > 0)
+    .map(([category, entries]) => ({ category, entries }))
+}
 
 const BAR_STYLE: React.CSSProperties = {
   position: 'fixed',
@@ -116,11 +152,37 @@ const PILL_STYLE: React.CSSProperties = {
 
 const PICKER_STYLE: React.CSSProperties = {
   display: 'flex',
-  gap: 4,
+  flexDirection: 'column',
+  gap: 6,
   background: 'rgba(20, 22, 24, 0.92)',
   padding: 6,
   borderRadius: 6,
   border: '1px solid #333',
+  maxWidth: 'calc(100vw - 32px)',
+}
+
+const PICKER_GROUP_STYLE: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  gap: 4,
+}
+
+const PICKER_GROUP_LABEL_STYLE: React.CSSProperties = {
+  color: '#888',
+  fontSize: 10,
+  fontWeight: 600,
+  letterSpacing: 0.5,
+  textTransform: 'uppercase',
+  paddingRight: 4,
+  userSelect: 'none',
+}
+
+const PICKER_LOADING_STYLE: React.CSSProperties = {
+  color: '#aaa',
+  fontSize: 12,
+  padding: '4px 8px',
+  fontStyle: 'italic',
 }
 
 function buttonStyle(active: boolean, disabled: boolean): React.CSSProperties {
@@ -133,8 +195,15 @@ function buttonStyle(active: boolean, disabled: boolean): React.CSSProperties {
   }
 }
 
-function gardenLabel(type: PlacementType, prefabSlug?: string | null): string {
-  if (type === 'prefab') return prefabSlug ?? 'Prefab'
+function gardenLabel(
+  type: PlacementType,
+  prefabSlug: string | null | undefined,
+  catalog: PrefabCatalog | null,
+): string {
+  if (type === 'prefab') {
+    if (!prefabSlug) return 'Prefab'
+    return catalog?.[prefabSlug]?.displayName ?? prefabSlug
+  }
   if (type === 'bed') return 'Bed'
   if (type === 'plant') return 'Plant'
   return type
@@ -155,6 +224,8 @@ export default function MainToolbar() {
   const setPlacement = useGarden((s) => s.setPlacement)
   const housePlacement = useGarden((s) => s.housePlacement)
   const setHousePlacement = useGarden((s) => s.setHousePlacement)
+  const prefabCatalog = useGarden((s) => s.prefabCatalog)
+  const pickerGroups = useMemo(() => buildPickerGroups(prefabCatalog), [prefabCatalog])
 
   // Esc cancels whichever placement is active. Garden takes precedence (it's
   // the simpler pipeline) but in practice the two are mutually exclusive
@@ -206,7 +277,7 @@ export default function MainToolbar() {
           onClick={() => setPlacement(null)}
           title="Click to cancel placement"
         >
-          Click ground to place {gardenLabel(placement.type, placement.prefabSlug)} (Esc to cancel)
+          Click ground to place {gardenLabel(placement.type, placement.prefabSlug, prefabCatalog)} (Esc to cancel)
         </div>
       )}
       {housePlacement && (
@@ -223,18 +294,32 @@ export default function MainToolbar() {
       <div style={BAR_STYLE}>
         {isGardenPicking && (
           <div style={PICKER_STYLE}>
-            {PREFAB_SLUGS.map((slug) => (
-              <button
-                key={slug}
-                style={BUTTON_STYLE}
-                onClick={() => enterGarden('prefab', slug)}
-              >
-                {slug}
-              </button>
+            {!prefabCatalog && (
+              <div style={PICKER_LOADING_STYLE}>Loading prefab catalog…</div>
+            )}
+            {prefabCatalog && pickerGroups.length === 0 && (
+              <div style={PICKER_LOADING_STYLE}>No prefabs available</div>
+            )}
+            {pickerGroups.map(({ category, entries }) => (
+              <div key={category} style={PICKER_GROUP_STYLE}>
+                <span style={PICKER_GROUP_LABEL_STYLE}>{category}</span>
+                {entries.map(({ slug, spec }) => (
+                  <button
+                    key={slug}
+                    style={BUTTON_STYLE}
+                    title={slug}
+                    onClick={() => enterGarden('prefab', slug)}
+                  >
+                    {spec.displayName}
+                  </button>
+                ))}
+              </div>
             ))}
-            <button style={BUTTON_STYLE} onClick={() => setPlacement(null)}>
-              Cancel
-            </button>
+            <div style={PICKER_GROUP_STYLE}>
+              <button style={BUTTON_STYLE} onClick={() => setPlacement(null)}>
+                Cancel
+              </button>
+            </div>
           </div>
         )}
 

@@ -9,6 +9,7 @@
  */
 import { create } from 'zustand'
 import { getGarden, listEntities } from '../api/client'
+import { fetchPrefabCatalog, type PrefabCatalog } from '../api/prefabs'
 import type { Garden, GardenEntity, Guid, Nudge } from '../api/types'
 import type { Units } from './unitsHelpers'
 
@@ -289,6 +290,15 @@ export interface GardenState {
    */
   units: Units
 
+  /**
+   * Data-driven prefab catalog fetched once on app boot from
+   * `GET /api/v1/prefabs`. Drives the prefab picker, default geometry, and
+   * (in upcoming work) hierarchy / placement / AI rules. `null` while loading
+   * or if the fetch failed — callers must tolerate the null state and fall
+   * back to a sensible default.
+   */
+  prefabCatalog: PrefabCatalog | null
+
   /** Switch active garden, persist id, fetch garden + entities, replace state. */
   setCurrentGarden: (id: Guid) => Promise<void>
   /** REST or SignalR upsert path. Idempotent; replaces the whole entity by id. */
@@ -344,6 +354,14 @@ export interface GardenState {
    * off). Persisted to localStorage.
    */
   setUnits: (v: Units) => void
+
+  /**
+   * Fetch the prefab catalog from the server and stash it in state. Called
+   * once on app boot (see App.tsx). Idempotent: if the catalog is already
+   * loaded, this is a no-op. Errors are logged but not surfaced — callers
+   * fall back to defaults when `prefabCatalog` is null.
+   */
+  loadPrefabCatalog: () => Promise<void>
 }
 
 export const useGarden = create<GardenState>((set, get) => ({
@@ -365,6 +383,7 @@ export const useGarden = create<GardenState>((set, get) => ({
   stickyPlacement: readPersistedSticky(),
   multiSelectMode: readPersistedMultiMode(),
   units: readPersistedUnits(),
+  prefabCatalog: null,
 
   setCurrentGarden: async (id) => {
     if (!id) return
@@ -579,5 +598,21 @@ export const useGarden = create<GardenState>((set, get) => ({
       if (nextSnap !== s.snap) writePersistedSnap(nextSnap)
       return { units: v, snap: nextSnap }
     })
+  },
+
+  loadPrefabCatalog: async () => {
+    // Idempotent: skip if already loaded. Catalog is immutable for the session.
+    if (get().prefabCatalog) return
+    try {
+      const catalog = await fetchPrefabCatalog()
+      // Bail out if a concurrent load already populated the slot.
+      if (get().prefabCatalog) return
+      set({ prefabCatalog: catalog })
+    } catch (err) {
+      // Don't surface a toast — the picker shows "Loading..." until catalog
+      // arrives, and DemoGround.tsx falls back to a hardcoded default size
+      // when null. Log so debugging is possible.
+      console.error('[garden-store] failed to load prefab catalog', err)
+    }
   },
 }))
