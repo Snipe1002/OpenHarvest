@@ -16,6 +16,7 @@
  */
 import type { ThreeEvent } from '@react-three/fiber'
 import { ApiError, createEntity } from '../api/client'
+import type { PrefabCatalog } from '../api/prefabs'
 import type {
   CreateEntityRequest,
   GardenEntity,
@@ -40,11 +41,34 @@ function defaultPlantGeometry(): Geometry {
   return { kind: 'Cylinder', radius: 0.04, height: 0.4 }
 }
 
-function defaultPrefabGeometry(slug: string): Geometry {
+/** Hardcoded fallback used only if the prefab catalog hasn't loaded yet (race
+ * between toolbar arming and catalog fetch). Logs a warning so the dev sees
+ * the race in the console; once the catalog lands the lookup wins. */
+const FALLBACK_PREFAB_SIZE = { x: 0.4, y: 0.5, z: 0.4 }
+
+function defaultPrefabGeometry(slug: string, catalog: PrefabCatalog | null): Geometry {
+  // Phase v2 — read default size + geometry kind from the data-driven catalog
+  // rather than hardcoding. The `accepts` / `parentableTo` fields on the spec
+  // are exposed but not yet enforced here; that wiring lands with the upcoming
+  // hierarchy / parented-placement work.
+  const spec = catalog?.[slug]
+  if (!spec) {
+    console.warn('[DemoGround] prefab catalog missing entry for', slug, '— using fallback size')
+    return {
+      kind: 'Prefab',
+      prefabRef: slug,
+      size: { ...FALLBACK_PREFAB_SIZE },
+    }
+  }
   return {
+    // The wire-format Geometry uses the broader GeometryKind union, but only
+    // 'Box' / 'Cylinder' / 'Prefab' are valid for catalog entries. We always
+    // emit 'Prefab' on the wire so the entity round-trip preserves the slug
+    // via prefabRef — the catalog's `geometryKind` is metadata for the client
+    // renderer, not the wire kind.
     kind: 'Prefab',
     prefabRef: slug,
-    size: { x: 0.4, y: 0.5, z: 0.4 },
+    size: { x: spec.defaultSize.x, y: spec.defaultSize.y, z: spec.defaultSize.z },
   }
 }
 
@@ -52,6 +76,7 @@ function buildCreateRequest(
   type: PlacementType,
   point: { x: number; y: number; z: number },
   prefabSlug: string | null | undefined,
+  catalog: PrefabCatalog | null,
 ): CreateEntityRequest {
   const transform: Transform = {
     ...IDENTITY_TRANSFORM,
@@ -74,14 +99,17 @@ function buildCreateRequest(
         geometry: defaultPlantGeometry(),
         tags: [],
       }
-    case 'prefab':
+    case 'prefab': {
+      const slug = prefabSlug ?? 'terracotta-pot'
+      const spec = catalog?.[slug]
       return {
         kind: 'Structure',
-        name: prefabSlug ?? 'New Prefab',
+        name: spec?.displayName ?? prefabSlug ?? 'New Prefab',
         transform,
-        geometry: defaultPrefabGeometry(prefabSlug ?? 'terracotta-pot'),
+        geometry: defaultPrefabGeometry(slug, catalog),
         tags: [],
       }
+    }
   }
 }
 
@@ -96,6 +124,7 @@ export default function DemoGround() {
       currentGardenId,
       snap,
       multiSelectMode,
+      prefabCatalog,
     } = state
 
     // ---- House placement: wall corner clicks override everything else ----
@@ -144,7 +173,7 @@ export default function DemoGround() {
         return
       }
       const point = e.point
-      const body = buildCreateRequest(placement.type, point, placement.prefabSlug)
+      const body = buildCreateRequest(placement.type, point, placement.prefabSlug, prefabCatalog)
       try {
         const created: GardenEntity = await createEntity(currentGardenId, body)
         // Optimistic local insert; SignalR `entityUpserted` will arrive too,

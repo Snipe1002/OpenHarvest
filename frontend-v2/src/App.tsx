@@ -44,11 +44,16 @@ import { useGarden } from './store/garden'
 export default function App() {
   const currentGardenId = useGarden((s) => s.currentGardenId)
   const setCurrentGarden = useGarden((s) => s.setCurrentGarden)
+  const loadPrefabCatalog = useGarden((s) => s.loadPrefabCatalog)
   const entities = useGarden((s) => s.entities)
   const translateModeId = useGarden((s) => s.translateModeId)
 
   useEffect(() => {
     let cancelled = false
+    // Kick off the prefab catalog fetch in parallel with the garden bootstrap —
+    // the scene renders without it (DemoGround falls back to a default geometry)
+    // and the picker UI shows "Loading…" until it arrives.
+    void loadPrefabCatalog()
     if (currentGardenId) {
       void setCurrentGarden(currentGardenId)
       return

@@ -20,4 +20,15 @@
     <ProjectReference Include="..\OpenHarvest.Infrastructure\OpenHarvest.Infrastructure.csproj" />
   </ItemGroup>
 
+  <!-- Phase v2 — data-driven prefab catalog. PrefabsController streams this file
+       directly from ContentRootPath, so it must be copied to the output / publish
+       directory alongside the assembly. The Web SDK already auto-includes Data\*.json
+       as Content; <Update> just augments the metadata to ensure publish copies it. -->
+  <ItemGroup>
+    <Content Update="Data\prefabs.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

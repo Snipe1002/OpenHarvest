@@ -1,0 +1,161 @@
+{
+  "_meta": {
+    "comment": "OpenHarvest v2 prefab catalog — data-driven entity behavior. Ported from v1 wwwroot/lib/prefabs.js (which used feet); all sizes here are in METERS (1 ft = 0.3048 m). Each entry declares what it accepts as children (`accepts`), what it can sit on as a parent (`parentableTo`), default size, surface offset for child placement, and named anchor sets. Hierarchy fields (`accepts`, `parentableTo`, `surface`, `anchorPoints`) are EXPOSED but not yet enforced — they're consumed by the upcoming hierarchy / parented-placement work (milestone #7). Sizing convention matches v1: x = width/diameter, y = height, z = depth (z is ignored for cylindrical prefabs).",
+    "units": "meters",
+    "version": 1
+  },
+
+  "raised-bed-wood": {
+    "displayName": "Raised Bed (Wood)",
+    "category": "container",
+    "defaultSize": { "x": 1.22, "y": 0.305, "z": 2.44 },
+    "accepts": ["plant", "decoration"],
+    "parentableTo": ["ground", "fixture"],
+    "surface": { "y": 0.305, "snapGrid": 0.15 },
+    "anchorPoints": ["corners", "edge-midpoints", "center"],
+    "stackable": false,
+    "geometryKind": "Box"
+  },
+
+  "square-planter": {
+    "displayName": "Square Planter",
+    "category": "container",
+    "defaultSize": { "x": 0.61, "y": 0.46, "z": 0.61 },
+    "accepts": ["plant", "decoration"],
+    "parentableTo": ["ground", "fixture"],
+    "surface": { "y": 0.46, "snapGrid": 0.10 },
+    "anchorPoints": ["corners", "center"],
+    "stackable": false,
+    "geometryKind": "Box"
+  },
+
+  "terracotta-pot": {
+    "displayName": "Terracotta Pot",
+    "category": "container",
+    "defaultSize": { "x": 0.305, "y": 0.366, "z": 0.305 },
+    "accepts": ["plant", "decoration"],
+    "parentableTo": ["ground", "fixture"],
+    "surface": { "y": 0.366, "snapGrid": 0.05 },
+    "anchorPoints": ["center"],
+    "stackable": false,
+    "geometryKind": "Cylinder"
+  },
+
+  "trellis-flat": {
+    "displayName": "Trellis (Flat)",
+    "category": "fixture",
+    "defaultSize": { "x": 1.22, "y": 1.83, "z": 0.061 },
+    "accepts": ["plant"],
+    "parentableTo": ["ground", "container"],
+    "anchorPoints": ["base-center", "rail-midpoints"],
+    "stackable": false,
+    "geometryKind": "Box"
+  },
+
+  "tomato-cage": {
+    "displayName": "Tomato Cage",
+    "category": "fixture",
+    "defaultSize": { "x": 0.46, "y": 1.22, "z": 0.46 },
+    "accepts": ["plant"],
+    "parentableTo": ["ground", "container"],
+    "anchorPoints": ["center"],
+    "stackable": false,
+    "geometryKind": "Cylinder"
+  },
+
+  "greenhouse-arch": {
+    "displayName": "Greenhouse Arch",
+    "category": "container",
+    "defaultSize": { "x": 2.44, "y": 2.13, "z": 3.66 },
+    "accepts": ["plant", "decoration", "container", "fixture"],
+    "parentableTo": ["ground"],
+    "surface": { "y": 0.0, "snapGrid": 0.30 },
+    "anchorPoints": ["floor-center", "corners"],
+    "stackable": false,
+    "geometryKind": "Prefab"
+  },
+
+  "stake": {
+    "displayName": "Stake",
+    "category": "fixture",
+    "defaultSize": { "x": 0.091, "y": 1.22, "z": 0.091 },
+    "accepts": ["plant"],
+    "parentableTo": ["ground", "container"],
+    "anchorPoints": ["base"],
+    "stackable": false,
+    "geometryKind": "Cylinder"
+  },
+
+  "fence-section": {
+    "displayName": "Fence Section",
+    "category": "fixture",
+    "defaultSize": { "x": 1.83, "y": 1.22, "z": 0.046 },
+    "accepts": [],
+    "parentableTo": ["ground"],
+    "anchorPoints": ["post-bases"],
+    "stackable": false,
+    "geometryKind": "Box"
+  },
+
+  "floor-slab": {
+    "_comment": "House primitive — v2 prefers Pascal-managed walls/doors/windows, but the catalog entry is retained for legacy v1 entities. Treat floor slabs as a ground-equivalent: containers and fixtures can parent onto them.",
+    "displayName": "Floor",
+    "category": "fixture",
+    "defaultSize": { "x": 3.66, "y": 0.076, "z": 3.66 },
+    "accepts": ["container", "fixture", "decoration"],
+    "parentableTo": ["ground"],
+    "surface": { "y": 0.076, "snapGrid": 0.30 },
+    "anchorPoints": ["corners", "center"],
+    "stackable": false,
+    "geometryKind": "Box"
+  },
+
+  "wall-segment": {
+    "_comment": "House primitive — v2 prefers Pascal-managed walls. Catalog entry retained for legacy v1 entities; wall-mounted children (shelves, doors, windows) reference `wall` as their parent category.",
+    "displayName": "Wall",
+    "category": "fixture",
+    "defaultSize": { "x": 2.44, "y": 2.44, "z": 0.152 },
+    "accepts": ["wall-mounted"],
+    "parentableTo": ["ground", "fixture"],
+    "anchorPoints": ["face-center", "edge-midpoints"],
+    "stackable": false,
+    "geometryKind": "Box"
+  },
+
+  "door": {
+    "_comment": "House primitive — v2 prefers Pascal-managed doors. Catalog entry retained for legacy v1 entities. Conceptually a wall composite; parents to the wall it cuts into.",
+    "displayName": "Door",
+    "category": "fixture",
+    "defaultSize": { "x": 1.22, "y": 2.44, "z": 0.152 },
+    "accepts": [],
+    "parentableTo": ["wall"],
+    "anchorPoints": ["base"],
+    "stackable": false,
+    "geometryKind": "Box"
+  },
+
+  "window": {
+    "_comment": "House primitive — v2 prefers Pascal-managed windows. Catalog entry retained for legacy v1 entities. Conceptually a wall composite; parents to the wall it cuts into.",
+    "displayName": "Window",
+    "category": "fixture",
+    "defaultSize": { "x": 1.22, "y": 2.44, "z": 0.152 },
+    "accepts": [],
+    "parentableTo": ["wall"],
+    "anchorPoints": ["center"],
+    "stackable": false,
+    "geometryKind": "Box"
+  },
+
+  "shelf-wall": {
+    "_comment": "House primitive — wall-mounted shelf. Parents onto a wall; accepts plants/decorations on its top surface.",
+    "displayName": "Wall Shelf",
+    "category": "fixture",
+    "defaultSize": { "x": 0.91, "y": 0.030, "z": 0.305 },
+    "accepts": ["plant", "decoration"],
+    "parentableTo": ["wall"],
+    "surface": { "y": 0.030, "snapGrid": 0.10 },
+    "anchorPoints": ["top-center"],
+    "stackable": false,
+    "geometryKind": "Box"
+  }
+}
