@@ -13,6 +13,7 @@ import type { Garden, GardenEntity, Guid, Nudge } from '../api/types'
 
 const STORAGE_KEY = 'openharvest:v2:currentGardenId'
 const SNAP_STORAGE_KEY = 'openharvest:v2:snap'
+const STICKY_STORAGE_KEY = 'openharvest:v2:stickyPlacement'
 
 function readPersistedGardenId(): Guid | null {
   if (typeof window === 'undefined') return null
@@ -55,6 +56,25 @@ function writePersistedSnap(v: SnapValue): void {
   try {
     if (v === null) window.localStorage.removeItem(SNAP_STORAGE_KEY)
     else window.localStorage.setItem(SNAP_STORAGE_KEY, String(v))
+  } catch {
+    /* no-op */
+  }
+}
+
+function readPersistedSticky(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.localStorage.getItem(STICKY_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writePersistedSticky(v: boolean): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (v) window.localStorage.setItem(STICKY_STORAGE_KEY, '1')
+    else window.localStorage.removeItem(STICKY_STORAGE_KEY)
   } catch {
     /* no-op */
   }
@@ -118,6 +138,13 @@ export interface GardenState {
   /** Currently selected Pascal wall id, or null. Drives the wall inspector. */
   selectedWallId: string | null
 
+  /**
+   * When true, finishing a placement (entity, wall, door, window) does NOT
+   * exit placement mode — the toolbar stays armed for another placement.
+   * Persisted to localStorage. Esc still cancels.
+   */
+  stickyPlacement: boolean
+
   /** Switch active garden, persist id, fetch garden + entities, replace state. */
   setCurrentGarden: (id: Guid) => Promise<void>
   /** REST or SignalR upsert path. Idempotent; replaces the whole entity by id. */
@@ -146,6 +173,8 @@ export interface GardenState {
   setHousePlacement: (p: HousePlacementState | null) => void
   /** Select / clear a Pascal wall (separate from garden entity selection). */
   selectWall: (id: string | null) => void
+  /** Toggle / set sticky placement, persist to localStorage. */
+  setStickyPlacement: (v: boolean) => void
 }
 
 export const useGarden = create<GardenState>((set, get) => ({
@@ -162,6 +191,7 @@ export const useGarden = create<GardenState>((set, get) => ({
   snap: readPersistedSnap(),
   housePlacement: null,
   selectedWallId: null,
+  stickyPlacement: readPersistedSticky(),
 
   setCurrentGarden: async (id) => {
     if (!id) return
@@ -266,5 +296,10 @@ export const useGarden = create<GardenState>((set, get) => ({
       selectedWallId: id,
       selectedEntityId: id ? null : s.selectedEntityId,
     }))
+  },
+
+  setStickyPlacement: (v) => {
+    writePersistedSticky(v)
+    set({ stickyPlacement: v })
   },
 }))
