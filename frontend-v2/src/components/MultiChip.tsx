@@ -8,16 +8,15 @@
  * matching the "shift held" desktop behavior — preserves multi-picks against
  * accidental misses.
  *
- * Sits to the right of StickyChip in the top-left chip stack. Persists to
- * localStorage via the store.
+ * Position: third slot in the top-left chip column (SnapChip → StickyChip
+ * → MultiChip → UnitsChip). Persists to localStorage via the store.
  */
 import { useGarden } from '../store/garden'
 
 const STYLE: React.CSSProperties = {
   position: 'fixed',
-  top: 16,
-  // SnapChip is at left:16, StickyChip is at left:124. This sits next.
-  left: 232,
+  top: 80, // Below StickyChip at 48 + ~28 height + 4 gap.
+  left: 16,
   zIndex: 11,
   padding: '6px 10px',
   background: 'rgba(20, 22, 24, 0.92)',

@@ -8,17 +8,18 @@
  * The pill must appear ABOVE the canvas pointer events but doesn't capture
  * pointermoves — `useTranslateDrag` does that on the entity itself.
  *
- * Sits below the AddToolbar's placement pill (different top offset) so the
- * two never visually collide; in practice translate mode and add-placement
- * mode are mutually exclusive but we keep the spatial separation as a
- * defensive UX choice.
+ * Position: top-center at top:152 — guaranteed below the top-left chip
+ * column (Snap/Sticky/Multi/Units, which ends at ~top:142) at any viewport
+ * width or orientation. The MainToolbar's placement-status pill uses the
+ * same offset; the two are mutually exclusive in practice (you can't be
+ * translating an entity AND placing a wall/door/window/garden item at once).
  */
 import { useEffect, useMemo } from 'react'
 import { useGarden } from '../store/garden'
 
 const PILL_STYLE: React.CSSProperties = {
   position: 'fixed',
-  top: 16,
+  top: 152,
   left: '50%',
   transform: 'translateX(-50%)',
   background: 'rgba(60, 130, 200, 0.92)',

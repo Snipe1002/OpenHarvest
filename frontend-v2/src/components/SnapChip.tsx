@@ -1,15 +1,26 @@
 /**
  * SnapChip — small fixed-position chip in the top-left corner showing the
- * current snap distance. Tap to cycle: off → 0.1m → 0.5m → 1.0m → off.
+ * current snap distance. Tap to cycle through the active unit system's snap
+ * list.
  *
  * Snap is honored by:
  *   - useTranslateDrag (entity drag-to-move quantizes x / z to the snap)
- *   - HouseToolbar wall placement (corner clicks quantize to the snap)
+ *   - MainToolbar wall placement (corner clicks quantize to the snap)
  *
  * Snap state is persisted in localStorage by the store; this chip is a
- * pure UI control over `useGarden().snap` / `setSnap`.
+ * pure UI control over `useGarden().snap` / `setSnap`. The cycle list and
+ * label format depend on `useGarden().units` (metric vs imperial).
+ *
+ * Position: first slot in the top-left chip column. Sibling chips
+ * (StickyChip, MultiChip, UnitsChip) stack below this one.
  */
-import { useGarden, type SnapValue } from '../store/garden'
+import {
+  IMPERIAL_SNAP_VALUES,
+  METRIC_SNAP_VALUES,
+  useGarden,
+  type SnapValue,
+} from '../store/garden'
+import { formatLength } from '../store/unitsHelpers'
 
 const STYLE: React.CSSProperties = {
   position: 'fixed',
@@ -33,28 +44,39 @@ const ACTIVE_STYLE: React.CSSProperties = {
   borderColor: '#4a90c8',
 }
 
-const ORDER: SnapValue[] = [null, 0.1, 0.5, 1.0]
-
-function next(v: SnapValue): SnapValue {
-  const i = ORDER.indexOf(v)
-  return ORDER[(i + 1) % ORDER.length]
+function nextSnap(v: SnapValue, list: SnapValue[]): SnapValue {
+  // The list always starts with `null` (off). Match by approximate equality
+  // to tolerate accumulated FP drift from the closest-neighbor migration on
+  // unit flips. If we can't find the current value (e.g. user just flipped
+  // and snap was reset), start at the first non-null entry.
+  let i = list.findIndex((x) => snapEq(x, v))
+  if (i < 0) i = 0
+  return list[(i + 1) % list.length]
 }
 
-function label(v: SnapValue): string {
+function snapEq(a: SnapValue, b: SnapValue): boolean {
+  if (a === null && b === null) return true
+  if (a === null || b === null) return false
+  return Math.abs(a - b) < 1e-6
+}
+
+function snapLabel(v: SnapValue, units: 'metric' | 'imperial'): string {
   if (v === null) return 'Snap: off'
-  return `Snap: ${v}m`
+  return `Snap: ${formatLength(v, units)}`
 }
 
 export default function SnapChip() {
   const snap = useGarden((s) => s.snap)
   const setSnap = useGarden((s) => s.setSnap)
+  const units = useGarden((s) => s.units)
+  const list = units === 'metric' ? METRIC_SNAP_VALUES : IMPERIAL_SNAP_VALUES
   return (
     <button
       style={snap === null ? STYLE : ACTIVE_STYLE}
-      onClick={() => setSnap(next(snap))}
+      onClick={() => setSnap(nextSnap(snap, list))}
       title="Cycle snap distance"
     >
-      {label(snap)}
+      {snapLabel(snap, units)}
     </button>
   )
 }

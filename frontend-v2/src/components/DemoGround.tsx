@@ -24,7 +24,7 @@ import type {
 } from '../api/types'
 import type { PlacementType } from '../store/garden'
 import { useGarden } from '../store/garden'
-import { createWallBetween, snapXZ } from './HouseToolbar'
+import { createWallBetween, snapXZ } from './houseHelpers'
 
 const IDENTITY_TRANSFORM: Transform = {
   position: { x: 0, y: 0, z: 0 },

@@ -10,11 +10,13 @@
 import { create } from 'zustand'
 import { getGarden, listEntities } from '../api/client'
 import type { Garden, GardenEntity, Guid, Nudge } from '../api/types'
+import type { Units } from './unitsHelpers'
 
 const STORAGE_KEY = 'openharvest:v2:currentGardenId'
 const SNAP_STORAGE_KEY = 'openharvest:v2:snap'
 const STICKY_STORAGE_KEY = 'openharvest:v2:stickyPlacement'
 const MULTI_STORAGE_KEY = 'openharvest:v2:multiSelectMode'
+const UNITS_STORAGE_KEY = 'openharvest:v2:units'
 
 function readPersistedGardenId(): Guid | null {
   if (typeof window === 'undefined') return null
@@ -36,17 +38,34 @@ function writePersistedGardenId(id: Guid | null): void {
   }
 }
 
-/** Allowed snap values in meters. `null` means snap is off. */
-export type SnapValue = null | 0.1 | 0.5 | 1.0
+/**
+ * Snap distance in meters, or `null` for free movement. The chip's cycle
+ * order depends on the active units system (see `METRIC_SNAP_VALUES` and
+ * `IMPERIAL_SNAP_VALUES`); the underlying type is just `number | null` so we
+ * can hold any value either system contributes (e.g. 0.0254 m for 1 inch).
+ */
+export type SnapValue = number | null
+
+/** Snap cycle for metric mode, in meters. */
+export const METRIC_SNAP_VALUES: SnapValue[] = [null, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0]
+
+/** Snap cycle for imperial mode, in meters (labeled in inches/feet). */
+export const IMPERIAL_SNAP_VALUES: SnapValue[] = [
+  null,
+  0.0254, // 1"
+  0.1524, // 6"
+  0.3048, // 1'
+  0.6096, // 2'
+  1.2192, // 4'
+]
 
 function readPersistedSnap(): SnapValue {
   if (typeof window === 'undefined') return null
   try {
     const v = window.localStorage.getItem(SNAP_STORAGE_KEY)
-    if (v === '0.1') return 0.1
-    if (v === '0.5') return 0.5
-    if (v === '1' || v === '1.0') return 1.0
-    return null
+    if (v === null) return null
+    const n = Number(v)
+    return Number.isFinite(n) && n > 0 ? n : null
   } catch {
     return null
   }
@@ -60,6 +79,47 @@ function writePersistedSnap(v: SnapValue): void {
   } catch {
     /* no-op */
   }
+}
+
+function readPersistedUnits(): Units {
+  if (typeof window === 'undefined') return 'metric'
+  try {
+    const v = window.localStorage.getItem(UNITS_STORAGE_KEY)
+    return v === 'imperial' ? 'imperial' : 'metric'
+  } catch {
+    return 'metric'
+  }
+}
+
+function writePersistedUnits(v: Units): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(UNITS_STORAGE_KEY, v)
+  } catch {
+    /* no-op */
+  }
+}
+
+/**
+ * Find the closest valid snap in the target list to a given snap value.
+ * Used when the user flips units — we want to pick a sensible neighbor in
+ * the new unit's snap cycle rather than jarringly resetting to off.
+ *
+ * If `current` is null, we return null (off stays off across unit flips).
+ */
+function closestSnap(current: SnapValue, list: SnapValue[]): SnapValue {
+  if (current === null) return null
+  let best: SnapValue = null
+  let bestDist = Infinity
+  for (const v of list) {
+    if (v === null) continue
+    const d = Math.abs(v - current)
+    if (d < bestDist) {
+      bestDist = d
+      best = v
+    }
+  }
+  return best
 }
 
 function readPersistedSticky(): boolean {
@@ -112,7 +172,7 @@ export interface PlacementState {
 }
 
 /**
- * Active "place house element" mode driven by the HouseToolbar. Walls need
+ * Active "place house element" mode driven by the MainToolbar. Walls need
  * two ground clicks (corners), so `pendingFirstCorner` holds the first hit
  * while we wait for the second. Doors / windows take a single click on a
  * wall mesh and don't use `pendingFirstCorner`.
@@ -185,6 +245,13 @@ export interface GardenState {
    */
   multiSelectMode: boolean
 
+  /**
+   * Active display unit system for length-bearing UI (snap chip, inspector
+   * number fields, etc). Internal coordinates remain in meters; only the
+   * display + parse layer reads this. Persisted to localStorage.
+   */
+  units: Units
+
   /** Switch active garden, persist id, fetch garden + entities, replace state. */
   setCurrentGarden: (id: Guid) => Promise<void>
   /** REST or SignalR upsert path. Idempotent; replaces the whole entity by id. */
@@ -232,6 +299,12 @@ export interface GardenState {
   setStickyPlacement: (v: boolean) => void
   /** Toggle / set multi-select mode, persist to localStorage. */
   setMultiSelectMode: (v: boolean) => void
+  /**
+   * Set the display unit system. Snap value is migrated to the closest
+   * neighbor in the new unit's snap cycle (or stays null if it was already
+   * off). Persisted to localStorage.
+   */
+  setUnits: (v: Units) => void
 }
 
 export const useGarden = create<GardenState>((set, get) => ({
@@ -251,6 +324,7 @@ export const useGarden = create<GardenState>((set, get) => ({
   selectedWallId: null,
   stickyPlacement: readPersistedSticky(),
   multiSelectMode: readPersistedMultiMode(),
+  units: readPersistedUnits(),
 
   setCurrentGarden: async (id) => {
     if (!id) return
@@ -448,5 +522,17 @@ export const useGarden = create<GardenState>((set, get) => ({
   setMultiSelectMode: (v) => {
     writePersistedMultiMode(v)
     set({ multiSelectMode: v })
+  },
+
+  setUnits: (v) => {
+    writePersistedUnits(v)
+    set((s) => {
+      // Migrate the snap value to the closest neighbor in the new unit
+      // system's snap cycle. `null` (off) stays off.
+      const targetList = v === 'metric' ? METRIC_SNAP_VALUES : IMPERIAL_SNAP_VALUES
+      const nextSnap = closestSnap(s.snap, targetList)
+      if (nextSnap !== s.snap) writePersistedSnap(nextSnap)
+      return { units: v, snap: nextSnap }
+    })
   },
 }))
