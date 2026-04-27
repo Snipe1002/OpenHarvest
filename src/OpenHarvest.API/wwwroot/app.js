@@ -124,6 +124,27 @@
       if (!res.ok) return [];
       return res.json();
     },
+    // Phase 5.4 — user-saved prefab templates ("My Prefabs"). The body for saveCustomPrefab
+    // pre-stringifies geometry + tags so the server can store them as opaque JSON blobs without
+    // re-parsing — keeps the schema flexible and means a future geometry kind doesn't need a
+    // server change.
+    async listCustomPrefabs(gid) {
+      const res = await fetch(`${BASE}api/v1/gardens/${gid}/prefabs`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    async saveCustomPrefab(gid, body) {
+      const res = await fetch(`${BASE}api/v1/gardens/${gid}/prefabs`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("save prefab failed: " + res.status);
+      return res.json();
+    },
+    async deleteCustomPrefab(gid, id) {
+      const res = await fetch(`${BASE}api/v1/gardens/${gid}/prefabs/${id}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 404) throw new Error("delete prefab failed: " + res.status);
+    },
   };
 
   // ---------- bootstrap garden id ----------
@@ -375,6 +396,9 @@
   // next ground tap reads this and POSTs an entity with geometry.kind = "Prefab". Cleared on
   // exit from PrefabPick (via setMode(Idle)).
   let pendingPrefabRef = null;
+  // Phase 5.4: while in PrefabPick mode, a saved "My Prefab" template if one was picked
+  // (mutually exclusive with pendingPrefabRef — whichever is non-null wins on placement).
+  let pendingCustomPrefab = null;
 
   // ---------- Phase 5.0 selection state ----------
   // selectedEntityId is the id of the entity currently shown in the toolbar.
@@ -436,6 +460,7 @@
       bedFirst = null;
       if (bedPreview) { bedPreview.dispose(); bedPreview = null; }
       pendingPrefabRef = null;
+      pendingCustomPrefab = null;
     }
   }
 
@@ -524,10 +549,15 @@
           setMode(Mode.Idle);
         }
       } else if (mode === Mode.PrefabPick) {
-        // Phase 5.2: a prefab was selected in the picker; this tap places it. If somehow
-        // pendingPrefabRef is null (user re-entered the mode without picking), bail back to idle.
+        // Phase 5.2: a built-in prefab was selected; this tap places it.
+        // Phase 5.4: a saved template can also be armed (pendingCustomPrefab) — we route to
+        // the custom-instance creator instead. Whichever pending slot is non-null wins;
+        // built-in path is the fallback to keep existing behavior identical.
         const p = pickGround();
-        if (p && pendingPrefabRef) {
+        if (p && pendingCustomPrefab) {
+          createCustomPrefabInstance(p, pendingCustomPrefab).catch(err => { console.error(err); setStatus("failed to place template"); });
+          setMode(Mode.Idle);
+        } else if (p && pendingPrefabRef) {
           createPrefab(p, pendingPrefabRef).catch(err => { console.error(err); setStatus("failed to place prefab"); });
           setMode(Mode.Idle);
         } else if (p) {
@@ -650,7 +680,149 @@
     setStatus(`placed ${prefab.name}`);
   }
 
-  function openPrefabPickerModal() {
+  // Phase 5.4: stamp a saved template into the world. Mirrors createPrefab but pulls geometry,
+  // tags, kind, and cropRef from the template instead of the built-in library. Tap point is
+  // snapped the same way, and pots still auto-parent onto containers (we read the geometry's
+  // prefabRef to find the built-in's category — falling back to "no parent" when absent).
+  async function createCustomPrefabInstance(p, template) {
+    let geometry, tags;
+    try {
+      geometry = JSON.parse(template.geometryJson || "{}");
+      tags = JSON.parse(template.tagsJson || "[]");
+    } catch (e) {
+      console.error("malformed template", template, e);
+      setStatus("template is corrupt — delete it");
+      return;
+    }
+    if (!Array.isArray(tags)) tags = [];
+
+    const lib = window.OpenHarvestPrefabs || {};
+    const builtin = (geometry && geometry.prefabRef) ? lib[geometry.prefabRef] : null;
+    const isPot = builtin && builtin.category === "Pots";
+
+    const snapped = applySnapVec({ x: p.x, y: 0, z: p.z });
+    const parentId = isPot ? findContainerAt(p, { checkY: true }) : null;
+
+    // Auto-suffix the name if a non-template entity already uses the same one. Keeps the
+    // chronicle ("Bed 2", "Bed 3") readable when the user mass-stamps a template.
+    const baseName = template.name || "Prefab";
+    const existingNames = new Set(
+      [...meshRegistry.values()].map(r => r.entity?.name).filter(Boolean));
+    let name = baseName;
+    if (existingNames.has(name)) {
+      for (let i = 2; i < 100; i++) {
+        const candidate = `${baseName} ${i}`;
+        if (!existingNames.has(candidate)) { name = candidate; break; }
+      }
+    }
+
+    const body = {
+      kind: template.entityKind || "Bed",
+      name,
+      cropRef: template.cropRef || null,
+      parentId,
+      transform: {
+        position: snapped,
+        rotation: { x: 0, y: 0, z: 0, w: 1 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      geometry,
+      tags,
+    };
+    setStatus("placing " + name + "...");
+    const created = await Api.addEntity(gardenId, body);
+    if (!meshRegistry.has(created.id)) meshForEntity(created);
+    setStatus(`placed ${name}`);
+  }
+
+  // Phase 5.4: small modal for saving the currently selected entity as a reusable template.
+  // Captures kind / geometry / tags / cropRef from the entity (the user's actual configuration,
+  // not a generic default) and lets them pick a display name + emoji icon for the picker tile.
+  function openSaveTemplateModal(eid) {
+    const rec = meshRegistry.get(eid);
+    if (!rec) return;
+    const entity = rec.entity;
+    closeModal();
+
+    // Sensible default name. For prefabs we use the prefab's display name + a size hint;
+    // for plain beds we synthesize a "WxD Raised Bed" hint from the geometry. Plants fall
+    // through to the entity name. The user can always edit before saving.
+    const g = entity.geometry || {};
+    const sz = g.size || {};
+    const sizeHint = (sz.x && sz.z) ? `${formatNum(fromFt(+sz.x))}×${formatNum(fromFt(+sz.z))} ${currentUnit} ` : "";
+    let defaultName = entity.name || "";
+    if (entity.kind === "Bed" && !defaultName) {
+      defaultName = `${sizeHint}Bed`.trim();
+    } else if (entity.kind === "Bed" && sizeHint && !defaultName.includes("×")) {
+      defaultName = `${sizeHint}${defaultName}`;
+    }
+
+    // 5 emoji choices that cover the common prefab archetypes — beds, planters, pots, plants,
+    // structures. The first one starts active; the user can swap by tapping any other tile.
+    const icons = ["🟫", "⬛", "🟧", "🪴", "🟪"];
+    const defaultIcon = (g.kind === "Prefab")
+      ? (window.OpenHarvestPrefabs?.[g.prefabRef]?.icon || icons[0])
+      : (entity.kind === "Plant" ? "🪴" : icons[0]);
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.innerHTML = `
+      <h2>Save as template</h2>
+      <input type="text" data-field="name" placeholder="3×6 Raised Bed" />
+      <div class="ai-meta" style="margin-top:6px;">Pick an icon for the tile in My Prefabs.</div>
+      <div class="emoji-pick" data-region="icons">
+        ${icons.map(e => `<div class="opt${e === defaultIcon ? " active" : ""}" data-icon="${escapeHtml(e)}">${escapeHtml(e)}</div>`).join("")}
+      </div>
+      <div class="modal-actions">
+        <button data-act="cancel">Cancel</button>
+        <button class="primary" data-act="save">Save</button>
+      </div>
+    `;
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    activeModal = backdrop;
+
+    const nameInput = modal.querySelector('[data-field="name"]');
+    nameInput.value = defaultName;
+
+    let chosenIcon = defaultIcon;
+    modal.querySelectorAll('.emoji-pick .opt').forEach(opt => {
+      opt.addEventListener("click", () => {
+        modal.querySelectorAll('.emoji-pick .opt').forEach(o => o.classList.remove("active"));
+        opt.classList.add("active");
+        chosenIcon = opt.dataset.icon || defaultIcon;
+      });
+    });
+
+    const save = async () => {
+      const name = nameInput.value.trim();
+      if (!name) { setStatus("template name required"); return; }
+      // Body uses pre-stringified JSON for geometry + tags so the server can store them as
+      // opaque text. Matches the wire shape advertised by Api.saveCustomPrefab.
+      const body = {
+        name,
+        icon: chosenIcon,
+        entityKind: entity.kind || "Bed",
+        cropRef: entity.cropRef || null,
+        geometryJson: JSON.stringify(entity.geometry || {}),
+        tagsJson: JSON.stringify(Array.isArray(entity.tags) ? entity.tags : []),
+      };
+      try {
+        await Api.saveCustomPrefab(gardenId, body);
+        closeModal();
+        setStatus("template saved");
+      } catch (e) { console.error(e); setStatus("save failed"); }
+    };
+
+    backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) closeModal(); });
+    modal.querySelector('[data-act="cancel"]').addEventListener("click", () => closeModal());
+    modal.querySelector('[data-act="save"]').addEventListener("click", save);
+    setTimeout(() => nameInput.focus(), 50);
+  }
+
+  async function openPrefabPickerModal() {
     closeModal();
     const lib = window.OpenHarvestPrefabs;
     if (!lib || typeof lib.__listByCategory !== "function") {
@@ -658,6 +830,10 @@
       return;
     }
     const groups = lib.__listByCategory();
+
+    // Phase 5.4: load user-saved templates in parallel with rendering. The picker stays
+    // responsive even if the API is slow — if the fetch fails we just show the built-ins.
+    const customPromise = Api.listCustomPrefabs(gardenId).catch(() => []);
 
     const backdrop = document.createElement("div");
     backdrop.className = "modal-backdrop";
@@ -679,6 +855,7 @@
     modal.innerHTML = `
       <h2>Place a prefab</h2>
       ${sections}
+      <div data-region="custom"></div>
       <div class="modal-actions">
         <button data-act="cancel">Cancel</button>
       </div>
@@ -687,11 +864,13 @@
     document.body.appendChild(backdrop);
     activeModal = backdrop;
 
+    // Built-in tile click → arm placement of that built-in slug.
     modal.querySelectorAll(".prefab-tile").forEach(tile => {
       tile.addEventListener("click", () => {
         const slug = tile.dataset.slug;
         if (!slug) return;
         pendingPrefabRef = slug;
+        pendingCustomPrefab = null;
         closeModal();
         setMode(Mode.PrefabPick);
         const def_ = lib[slug];
@@ -701,6 +880,68 @@
 
     backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) closeModal(); });
     modal.querySelector('[data-act="cancel"]').addEventListener("click", () => closeModal());
+
+    // Phase 5.4: render the My Prefabs section once the fetch resolves. The whole section is
+    // suppressed when the user has zero custom templates — we don't want a "My Prefabs" header
+    // sitting empty above the cancel button.
+    const customRegion = modal.querySelector('[data-region="custom"]');
+    customPromise.then(list => {
+      // Modal might have closed before the fetch resolved. Don't try to render into a detached
+      // node — just bail.
+      if (!customRegion.isConnected) return;
+      if (!Array.isArray(list) || list.length === 0) return;
+      renderMyPrefabsSection(customRegion, list);
+    });
+  }
+
+  // Build the "My Prefabs" group and wire up tap-to-place + ×-to-delete handlers. Pulled out
+  // of openPrefabPickerModal so we can re-render the same region in place after a delete
+  // without rebuilding the whole modal (and losing the user's scroll position).
+  function renderMyPrefabsSection(container, list) {
+    const tilesHtml = list.map(p => `
+      <div class="prefab-tile" data-id="${escapeHtml(p.id)}">
+        <div class="x" data-act="del" title="Delete template">×</div>
+        <div class="icon">${escapeHtml(p.icon || "📦")}</div>
+        <div class="label">${escapeHtml(p.name)}</div>
+      </div>
+    `).join("");
+    container.innerHTML = `
+      <div class="prefab-cat">My Prefabs</div>
+      <div class="prefab-grid">${tilesHtml}</div>
+    `;
+
+    container.querySelectorAll(".prefab-tile").forEach(tile => {
+      const id = tile.dataset.id;
+      const tpl = list.find(p => p.id === id);
+      if (!tpl) return;
+
+      // × delete button — confirm + DELETE + remove this tile from the visible list. We mutate
+      // `list` and re-render so the section auto-hides if the user empties it.
+      const xBtn = tile.querySelector('[data-act="del"]');
+      if (xBtn) {
+        xBtn.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          if (!confirm(`Delete template "${tpl.name}"?`)) return;
+          try {
+            await Api.deleteCustomPrefab(gardenId, id);
+            const idx = list.indexOf(tpl);
+            if (idx >= 0) list.splice(idx, 1);
+            if (list.length === 0) container.innerHTML = "";
+            else renderMyPrefabsSection(container, list);
+            setStatus("template deleted");
+          } catch (e) { console.error(e); setStatus("delete failed"); }
+        });
+      }
+
+      // Body click → arm placement of this template.
+      tile.addEventListener("click", () => {
+        pendingCustomPrefab = tpl;
+        pendingPrefabRef = null;
+        closeModal();
+        setMode(Mode.PrefabPick);
+        setStatus(`tap the ground to place ${tpl.name}`);
+      });
+    });
   }
 
   // Phase 5.3 — generalized container lookup. Returns the entity id of the smallest container
@@ -1609,6 +1850,9 @@
       tagsBtn.addEventListener("click", () => openTagsModal(eid));
     }
     fresh.querySelector('[data-act="duplicate"]').addEventListener("click", () => duplicateEntityById(eid));
+    // Phase 5.4 — save the current entity as a reusable "My Prefab" template.
+    const saveTplBtn = fresh.querySelector('[data-act="save-template"]');
+    if (saveTplBtn) saveTplBtn.addEventListener("click", () => openSaveTemplateModal(eid));
     fresh.querySelector('[data-act="delete"]').addEventListener("click", () => deleteEntityById(eid));
 
     // Re-bind the persistent header bits (icon doesn't react, but name/pos/close do).

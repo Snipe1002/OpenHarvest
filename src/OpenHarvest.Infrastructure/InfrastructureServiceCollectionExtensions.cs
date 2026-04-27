@@ -24,6 +24,7 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddScoped<IGardenRepository, GardenRepository>();
         services.AddScoped<ICropRepository, CropRepository>();
+        services.AddScoped<ICustomPrefabRepository, CustomPrefabRepository>();
 
         services.Configure<MinioOptions>(config.GetSection("Minio"));
         services.AddSingleton<IPhotoStore, MinioPhotoStore>();
