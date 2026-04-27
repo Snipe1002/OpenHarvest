@@ -128,18 +128,29 @@ export function useTranslateDrag(entity: GardenEntity): TranslateDragHandlers {
     if (!drag || drag.pointerId !== e.pointerId) return
     e.stopPropagation()
 
-    // Intersect the pointer ray with the y=0 ground plane.
+    // Intersect the pointer ray with the y=0 ground plane. The hit is in
+    // WORLD coords; the entity stores PARENT-LOCAL coords in transform.position
+    // when it has a parent. We snap in world space (so neighbor-edge magnet
+    // still works against world-positioned siblings of the parent) and then
+    // convert to local at the end.
     const hit = new THREE.Vector3()
     if (!e.ray.intersectPlane(GROUND_PLANE, hit)) return
 
-    const { snap, snapMode } = useGarden.getState()
+    const { snap, snapMode, entities } = useGarden.getState()
+    const parent = drag.original.parentId ? entities[drag.original.parentId] ?? null : null
+
     // Snap mode: 'edge' (default) prefers aligning the dragged entity's edge
     // to a neighbor's edge with `snap` as the gap; falls back to grid snap
     // when no neighbor is in range. 'center' just quantizes the entity's
     // center to a fixed world grid (the original behavior).
+    //
+    // Parented entities skip magnet today: the neighbor AABB calc reads
+    // `transform.position.x/z` literally (treating it as world), but a
+    // parented entity's stored values are LOCAL. Comparing those would yield
+    // a meaningless snap. Plain grid snap on the world hit still works.
     let x: number
     let z: number
-    if (snapMode === 'edge') {
+    if (snapMode === 'edge' && !parent) {
       const half = entityHalfExtents(entity)
       const hw = half?.hw ?? 0
       const hd = half?.hd ?? 0
@@ -147,6 +158,14 @@ export function useTranslateDrag(entity: GardenEntity): TranslateDragHandlers {
       ;[x, z] = snapXZWithMagnet(hit.x, hit.z, hw, hd, snap, neighbors)
     } else {
       ;[x, z] = snapXZ(hit.x, hit.z, snap)
+    }
+
+    // World -> parent-local conversion. v0 ignores parent rotation, so the
+    // mapping is a plain vector subtraction. Parent's world position is just
+    // its `transform.position` (true while no nested-parent rotation exists).
+    if (parent) {
+      x = x - parent.transform.position.x
+      z = z - parent.transform.position.z
     }
 
     // Preserve Y — translate is 2D. Y is edited via the inspector's number

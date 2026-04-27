@@ -1,9 +1,10 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Viewer } from '@pascal-app/viewer'
 import { CameraControls } from '@react-three/drei'
 import { emitter, type WallEvent } from '@pascal-app/core'
 import DemoGround from './components/DemoGround'
 import EntityRenderer from './components/EntityRenderer'
+import type { GardenEntity, Guid } from './api/types'
 import { createDoorOnWall, createWindowOnWall } from './components/houseHelpers'
 import InspectorCard from './components/InspectorCard'
 import MainToolbar from './components/MainToolbar'
@@ -134,6 +135,53 @@ export default function App() {
     }
   }, [])
 
+  // Hierarchy: bucket entities by parentId so we can recurse from the roots
+  // (parentId == null) outward. Three's scene graph then multiplies parent
+  // transforms onto children automatically — moving a parent moves its
+  // children with no manual cascade. Cycles would loop the recursion forever,
+  // so we guard with a `visited` Set and stop as soon as we'd revisit an id.
+  const entitiesByParent = useMemo(() => {
+    const map = new Map<Guid | null, GardenEntity[]>()
+    for (const e of Object.values(entities)) {
+      const key: Guid | null = e.parentId ?? null
+      const list = map.get(key)
+      if (list) list.push(e)
+      else map.set(key, [e])
+    }
+    return map
+  }, [entities])
+
+  const renderChildren = (parentId: Guid | null, visited: Set<Guid>): React.ReactNode => {
+    const kids = entitiesByParent.get(parentId)
+    if (!kids || kids.length === 0) return null
+    return kids.map((e) => {
+      if (visited.has(e.id)) {
+        // Cycle — log once and bail out of this branch. Shouldn't happen with
+        // a well-behaved backend, but defending against it here is cheap.
+        console.warn('[App] hierarchy cycle detected at', e.id)
+        return null
+      }
+      const nextVisited = new Set(visited)
+      nextVisited.add(e.id)
+      return (
+        <EntityRenderer key={e.id} entity={e}>
+          {renderChildren(e.id, nextVisited)}
+        </EntityRenderer>
+      )
+    })
+  }
+
+  // Orphan recovery: any entity whose parentId points at a non-existent entity
+  // would otherwise never render (because the recursion only walks down from
+  // null). Surface those as top-level so the user can still see + delete them.
+  const orphanRoots = useMemo(() => {
+    const out: GardenEntity[] = []
+    for (const e of Object.values(entities)) {
+      if (e.parentId && !entities[e.parentId]) out.push(e)
+    }
+    return out
+  }, [entities])
+
   return (
     <div style={{ width: '100vw', height: '100vh' }}>
       <SampleBuilding />
@@ -142,8 +190,11 @@ export default function App() {
             translate mode so the view doesn't pan with the drag. */}
         <CameraControls enabled={!translateModeId} />
         <DemoGround />
-        {Object.values(entities).map((e) => (
-          <EntityRenderer key={e.id} entity={e} />
+        {renderChildren(null, new Set())}
+        {orphanRoots.map((e) => (
+          <EntityRenderer key={e.id} entity={e}>
+            {renderChildren(e.id, new Set([e.id]))}
+          </EntityRenderer>
         ))}
         {/* Inspector is anchored to the selected entity in 3D space — drei's
             Html mounts it as DOM but tracks the world position. */}

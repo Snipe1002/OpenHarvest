@@ -16,7 +16,14 @@
  * Position is read from `entity.transform.position`. If the position is
  * obviously bogus (NaN), we log a warning and skip the entity so a single
  * malformed record can't break the whole scene.
+ *
+ * Hierarchy: `children` (typically more `<EntityRenderer>` nodes for parented
+ * entities) is forwarded down into the primitive's top-level `<group>`. That
+ * way Three's scene graph multiplies parent/child transforms automatically —
+ * a child's `entity.transform.position` is interpreted as parent-LOCAL coords.
+ * Moving the parent moves children with no manual cascade work.
  */
+import type { ReactNode } from 'react'
 import { Outlines, Text } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import DemoBed from './DemoBed'
@@ -62,7 +69,16 @@ function inferRole(entity: GardenEntity): 'bed' | 'plant' | 'known-prefab' | 'ho
   return 'unknown'
 }
 
-export default function EntityRenderer({ entity }: { entity: GardenEntity }) {
+export default function EntityRenderer({
+  entity,
+  children,
+}: {
+  entity: GardenEntity
+  /** Child <EntityRenderer> nodes for entities whose `parentId === entity.id`.
+   *  Forwarded into the primitive's top-level <group> so Three's scene graph
+   *  multiplies the parent transform onto every child for free. */
+  children?: ReactNode
+}) {
   const pos = entity.transform?.position
   if (!isFinitePosition(pos)) {
     console.warn('[EntityRenderer] entity has no usable position', entity.id, entity.name)
@@ -72,11 +88,11 @@ export default function EntityRenderer({ entity }: { entity: GardenEntity }) {
   const role = inferRole(entity)
   switch (role) {
     case 'bed':
-      return <DemoBed entity={entity} />
+      return <DemoBed entity={entity}>{children}</DemoBed>
     case 'plant':
-      return <DemoPlant entity={entity} />
+      return <DemoPlant entity={entity}>{children}</DemoPlant>
     case 'known-prefab':
-      return <PrefabPlaceholder entity={entity} />
+      return <PrefabPlaceholder entity={entity}>{children}</PrefabPlaceholder>
     case 'house':
       console.warn(
         '[EntityRenderer] skipping house primitive (Pascal-owned)',
@@ -86,11 +102,11 @@ export default function EntityRenderer({ entity }: { entity: GardenEntity }) {
       return null
     case 'unknown':
     default:
-      return <UnknownDebugCube entity={entity} />
+      return <UnknownDebugCube entity={entity}>{children}</UnknownDebugCube>
   }
 }
 
-function PrefabPlaceholder({ entity }: { entity: GardenEntity }) {
+function PrefabPlaceholder({ entity, children }: { entity: GardenEntity; children?: ReactNode }) {
   const selectEntity = useGarden((s) => s.selectEntity)
   const isSelected = useGarden((s) => s.selectedEntityIds.includes(entity.id))
   const isMultiSelected = useGarden(
@@ -144,11 +160,12 @@ function PrefabPlaceholder({ entity }: { entity: GardenEntity }) {
       >
         {slug}
       </Text>
+      {children}
     </group>
   )
 }
 
-function UnknownDebugCube({ entity }: { entity: GardenEntity }) {
+function UnknownDebugCube({ entity, children }: { entity: GardenEntity; children?: ReactNode }) {
   const selectEntity = useGarden((s) => s.selectEntity)
   const isSelected = useGarden((s) => s.selectedEntityIds.includes(entity.id))
   const isMultiSelected = useGarden(
@@ -203,6 +220,7 @@ function UnknownDebugCube({ entity }: { entity: GardenEntity }) {
       >
         {label}
       </Text>
+      {children}
     </group>
   )
 }

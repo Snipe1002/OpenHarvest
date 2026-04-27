@@ -15,7 +15,7 @@
  * highlight every plank.
  */
 import * as THREE from 'three'
-import { useMemo } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { Outlines } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import type { GardenEntity, Quaternion } from '../api/types'
@@ -24,6 +24,10 @@ import { useGroupTranslateDrag, useTranslateDrag } from './useTranslateDrag'
 
 interface DemoBedProps {
   entity: GardenEntity
+  /** Hierarchical children — typically more <EntityRenderer> nodes for plants
+   *  parented to this bed. Mounted inside the bed's transform group so Three's
+   *  scene graph applies the bed's position/rotation to them automatically. */
+  children?: ReactNode
 }
 
 const DEFAULT_SIZE: [number, number, number] = [2, 0.4, 1]
@@ -40,7 +44,7 @@ function quaternionToEuler(q: Quaternion): [number, number, number] {
   return [e.x, e.y, e.z]
 }
 
-export default function DemoBed({ entity }: DemoBedProps) {
+export default function DemoBed({ entity, children }: DemoBedProps) {
   const selectEntity = useGarden((s) => s.selectEntity)
   const isSelected = useGarden((s) => s.selectedEntityIds.includes(entity.id))
   const isMultiSelected = useGarden(
@@ -133,6 +137,13 @@ export default function DemoBed({ entity }: DemoBedProps) {
         <boxGeometry args={[w - 2 * t, h - 0.04, l - 2 * t]} />
         <meshStandardMaterial color="#3a2818" roughness={1.0} metalness={0} />
       </mesh>
+      {/* Hierarchical children. The outer group is shifted up by h/2 so its
+          center sits at the bed's mid-height; we offset back down by h/2 here
+          so the child sub-group origin sits at the bed's BOTTOM, matching the
+          convention used by `catalog.surface.y` (measured from the base). A
+          child plant with local position { x, y: surface.y, z } therefore
+          lands ON TOP of the bed at the soil line. */}
+      <group position={[0, -h / 2, 0]}>{children}</group>
     </group>
   )
 }
