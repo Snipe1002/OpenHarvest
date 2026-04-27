@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using OpenHarvest.API.Hubs;
 using OpenHarvest.Application.Nudges;
 using OpenHarvest.Domain.Components;
+using OpenHarvest.Domain.Entities;
 using OpenHarvest.Domain.Interfaces;
 using OpenHarvest.Domain.Nudges;
 
@@ -160,9 +161,41 @@ public class AdvisorController : ControllerBase
             CurrentSeason = SeasonOf(DateTime.UtcNow),
             Plantings = entities
                 .Where(e => e.Kind == Domain.Enums.EntityKind.Plant)
-                .Select(e => new EntitySummary { Name = e.Name, CropRef = e.CropRef })
+                .Select(e => new EntitySummary
+                {
+                    Name = e.Name,
+                    CropRef = e.CropRef,
+                    // Phase 5.3 — surface user tags AND any tags inherited from a parent
+                    // container (raised bed, pot, greenhouse). The user expects a plant in a
+                    // raised bed to be treated as "raised" even if they only tagged the bed,
+                    // and this is the cheapest place to merge that signal in.
+                    Tags = MergeTagsWithParent(e, entities),
+                })
                 .ToList(),
         };
+    }
+
+    private static List<string> MergeTagsWithParent(GardenEntity entity, IEnumerable<GardenEntity> all)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<string>();
+        void Add(IEnumerable<string>? src)
+        {
+            if (src is null) return;
+            foreach (var t in src)
+            {
+                if (string.IsNullOrWhiteSpace(t)) continue;
+                var trimmed = t.Trim();
+                if (seen.Add(trimmed)) ordered.Add(trimmed);
+            }
+        }
+        Add(entity.Tags);
+        if (entity.ParentId is { } pid)
+        {
+            var parent = all.FirstOrDefault(e => e.Id == pid);
+            Add(parent?.Tags);
+        }
+        return ordered;
     }
 
     private static string SeasonOf(DateTime utc)

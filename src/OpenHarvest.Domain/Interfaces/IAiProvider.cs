@@ -70,6 +70,14 @@ public class EntitySummary
 {
     public string Name { get; set; } = string.Empty;
     public string? CropRef { get; set; }
+
+    /// <summary>
+    /// Phase 5.3 — user-supplied tags propagated to the advisor so guidance can ground in
+    /// container type, exposure, watering style, etc. ("raised", "south-facing", "high-water").
+    /// Empty array when the user hasn't tagged the entity. Must remain a flat string list:
+    /// nothing in the prompt assumes structure.
+    /// </summary>
+    public List<string> Tags { get; set; } = new();
 }
 
 public enum ExperienceLevel { FirstTimer, Beginner, Intermediate, Experienced, Expert }

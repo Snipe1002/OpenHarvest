@@ -28,6 +28,11 @@ public class GardenEntityConfiguration : IEntityTypeConfiguration<GardenEntity>
         b.Property(e => e.CropRef).HasMaxLength(200);
         b.Property(e => e.Kind).HasConversion<string>().HasMaxLength(40);
 
+        // Phase 5.3 — tags as native Postgres text[]. Npgsql maps string[] to text[]
+        // automatically; we declare the column type explicitly so the migration is unambiguous
+        // and so a future GIN index can target the column without surprises.
+        b.Property(e => e.Tags).HasColumnType("text[]").IsRequired();
+
         b.Property(e => e.Transform).HasColumnType("jsonb").HasConversion(
             v => JsonSerializer.Serialize(v, JsonOptions),
             v => JsonSerializer.Deserialize<Transform>(v, JsonOptions)!);

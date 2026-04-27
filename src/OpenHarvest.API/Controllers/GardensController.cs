@@ -72,6 +72,20 @@ public class GardensController : ControllerBase
         return Ok(entities);
     }
 
+    // Phase 5.3 — auto-tag map for prefab placements. When a user drops a prefab from the
+    // picker, the body's geometry.kind is "Prefab" and geometry.prefabRef carries the slug.
+    // This map seeds the entity's tags so AI guidance immediately reflects the structure type
+    // ("raised", "container", "greenhouse") without forcing the user into the tag editor.
+    // Anything not in the map gets an empty seed; the user can still hand-tag via the toolbar.
+    private static readonly IReadOnlyDictionary<string, string[]> PrefabAutoTags =
+        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["raised-bed-wood"]  = new[] { "raised" },
+            ["square-planter"]   = new[] { "container" },
+            ["terracotta-pot"]   = new[] { "container" },
+            ["greenhouse-arch"]  = new[] { "greenhouse" },
+        };
+
     [HttpPost("{id:guid}/entities")]
     public async Task<ActionResult<GardenEntity>> AddEntity(
         Guid id,
@@ -79,6 +93,18 @@ public class GardensController : ControllerBase
         CancellationToken ct)
     {
         var now = DateTime.UtcNow;
+        var geometry = req.Geometry ?? Geometry.Box(new Vector3(1, 1, 1));
+
+        // Merge auto-tags-from-prefab with whatever the client supplied. Client tags win on
+        // duplicates (case-insensitive) so an explicit tag set isn't silently doubled by the
+        // auto-seed. Result is normalized: trimmed, non-empty, deduped.
+        var tags = NormalizeTags(req.Tags);
+        if (geometry is { Kind: GeometryKind.Prefab, PrefabRef: { } slug }
+            && PrefabAutoTags.TryGetValue(slug, out var auto))
+        {
+            tags = MergeTags(tags, auto);
+        }
+
         var entity = new GardenEntity
         {
             Id = Guid.NewGuid(),
@@ -88,13 +114,41 @@ public class GardensController : ControllerBase
             Name = req.Name?.Trim() ?? string.Empty,
             CropRef = string.IsNullOrWhiteSpace(req.CropRef) ? null : req.CropRef.Trim(),
             Transform = req.Transform ?? Transform.Identity,
-            Geometry = req.Geometry ?? Geometry.Box(new Vector3(1, 1, 1)),
+            Geometry = geometry,
+            Tags = tags,
             CreatedUtc = now,
             ModifiedUtc = now,
         };
         await _repo.AddEntityAsync(entity, ct);
         await _broadcaster.EntityUpserted(id, entity, ct);
         return CreatedAtAction(nameof(GetEntity), new { id, entityId = entity.Id }, entity);
+    }
+
+    private static string[] NormalizeTags(string[]? tags)
+    {
+        if (tags is null || tags.Length == 0) return Array.Empty<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<string>(tags.Length);
+        foreach (var raw in tags)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var t = raw.Trim();
+            if (seen.Add(t)) ordered.Add(t);
+        }
+        return ordered.ToArray();
+    }
+
+    private static string[] MergeTags(string[] primary, string[] secondary)
+    {
+        var seen = new HashSet<string>(primary, StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<string>(primary);
+        foreach (var t in secondary)
+        {
+            if (string.IsNullOrWhiteSpace(t)) continue;
+            var trimmed = t.Trim();
+            if (seen.Add(trimmed)) ordered.Add(trimmed);
+        }
+        return ordered.ToArray();
     }
 
     [HttpGet("{id:guid}/entities/{entityId:guid}")]
@@ -119,6 +173,9 @@ public class GardensController : ControllerBase
         if (req.Transform is not null) entity.Transform = req.Transform;
         if (req.Geometry is not null) entity.Geometry = req.Geometry;
         if (req.ParentId.HasValue) entity.ParentId = req.ParentId.Value == Guid.Empty ? null : req.ParentId.Value;
+        // Phase 5.3 — only touch tags when the caller actually sent the field. Sending an empty
+        // array IS meaningful (the user cleared all tags), so we treat null vs [] differently.
+        if (req.Tags is not null) entity.Tags = NormalizeTags(req.Tags);
 
         entity.ModifiedUtc = DateTime.UtcNow;
         await _repo.UpdateEntityAsync(entity, ct);
@@ -150,11 +207,13 @@ public record CreateEntityRequest(
     string? CropRef,
     Guid? ParentId,
     Transform? Transform,
-    Geometry? Geometry);
+    Geometry? Geometry,
+    string[]? Tags);
 
 public record UpdateEntityRequest(
     string? Name,
     string? CropRef,
     Guid? ParentId,
     Transform? Transform,
-    Geometry? Geometry);
+    Geometry? Geometry,
+    string[]? Tags);
