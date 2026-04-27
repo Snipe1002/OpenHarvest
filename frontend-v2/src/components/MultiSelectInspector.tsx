@@ -39,7 +39,7 @@
  * default — looking down +Y, +Z points "down" on the screen). The icons are
  * suggestive, not strict, so we annotate the tooltips.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import * as THREE from 'three'
 import { ApiError, createEntity, deleteEntity, updateEntity } from '../api/client'
 import type { CreateEntityRequest, GardenEntity, Quaternion } from '../api/types'
@@ -63,10 +63,15 @@ const PILL_STYLE: React.CSSProperties = {
   userSelect: 'none',
 }
 
-const WRAP_STYLE: React.CSSProperties = {
+/**
+ * Bottom offset is set dynamically by `useToolbarOffset` (below) so we always
+ * sit above MainToolbar with a clean 12px gap, even when the toolbar wraps to
+ * two lines on a narrow phone or grows new buttons. Hard-coding `bottom:90`
+ * worked while the toolbar was a single row but eclipsed itself once the
+ * House section wrapped underneath the Garden section on phone widths.
+ */
+const WRAP_STYLE_BASE: React.CSSProperties = {
   position: 'fixed',
-  // MainToolbar sits at bottom:16 with ~60px of height. Park us above that.
-  bottom: 90,
   left: '50%',
   transform: 'translateX(-50%)',
   display: 'flex',
@@ -74,6 +79,38 @@ const WRAP_STYLE: React.CSSProperties = {
   alignItems: 'center',
   gap: 4,
   zIndex: 12,
+}
+
+const TOOLBAR_GAP_PX = 12 // gap between MainToolbar's top edge and our bottom edge
+const FALLBACK_BOTTOM_PX = 96 // used while toolbar isn't yet measurable
+
+/**
+ * Reads MainToolbar's actual rendered height + bottom offset and returns
+ * the `bottom` value our pill should use to clear it. Updates on toolbar
+ * resize (e.g. when the prefab picker opens, or when the row wraps because
+ * the viewport got narrower).
+ */
+function useToolbarOffset(): number {
+  const [offset, setOffset] = useState(FALLBACK_BOTTOM_PX)
+  useLayoutEffect(() => {
+    const el = document.querySelector('[data-toolbar="main"]') as HTMLElement | null
+    if (!el) return
+    const measure = () => {
+      const rect = el.getBoundingClientRect()
+      const cs = window.getComputedStyle(el)
+      const toolbarBottom = parseInt(cs.bottom || '16', 10) || 16
+      setOffset(toolbarBottom + rect.height + TOOLBAR_GAP_PX)
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    window.addEventListener('resize', measure)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [])
+  return offset
 }
 
 const ICON_BUTTON: React.CSSProperties = {
@@ -436,9 +473,11 @@ export default function MultiSelectInspector() {
   const buttonDisabled = busy
 
   const breakdown = describeKindBreakdown(selected)
+  const toolbarBottom = useToolbarOffset()
+  const wrapStyle: React.CSSProperties = { ...WRAP_STYLE_BASE, bottom: toolbarBottom }
 
   return (
-    <div style={WRAP_STYLE} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+    <div style={wrapStyle} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
       <div style={HEADER_STYLE}>
         <span style={{ color: '#4ec9ff', fontWeight: 600 }}>{selected.length} selected</span>
         <span style={{ color: '#aaa' }}>— {breakdown}</span>
