@@ -19,39 +19,87 @@
 (function () {
   const C = (r, g, b) => new BABYLON.Color3(r, g, b);
 
-  // Shared material palette. Materials are built lazily per-scene because Babylon
-  // materials are owned by a scene and we have one scene per page load.
+  // Phase 5.7 — fancy renderer. When `window.OpenHarvestFancy` is true we mint PBRMaterials
+  // (image-based lighting via the env cubemap, energy-conserving roughness/metallic shading);
+  // otherwise we fall back to the original StandardMaterial palette so the app still renders
+  // on hardware that can't afford full PBR (mobile, the no-fancy-mode toggle path). The two
+  // branches expose the same field names — every prefab builder reads `pal(scene).wood` and
+  // gets *something* — so the rest of this file stays branch-free.
+  //
+  // PBR conventions used below:
+  //   - albedoColor       — replaces StandardMaterial.diffuseColor.
+  //   - metallic          — 0 for organic (wood, soil, terracotta, plastic, drywall), 0.85 for
+  //                         the metal palette entry (trellis, tomato cage, greenhouse frame).
+  //   - roughness         — high for soil/wood (0.9), mid for plastic (0.6), low for glass (0.2)
+  //                         and metal (0.3). Glass also keeps an alpha for translucency.
+  //   - alpha             — same semantics as Standard; left unset for opaque surfaces so
+  //                         depth-write stays sane.
+  //
+  // Per-instance tinting (Phase 5.2.2 (B5)) keeps working: applyEntityColor in app.js clones
+  // the dominant material and mutates `albedoColor` (PBR) OR `diffuseColor` (Standard) — see
+  // applyEntityColor's branching for both fields.
   const matCache = new WeakMap();
   function pal(scene) {
     let p = matCache.get(scene);
     if (p) return p;
-    const make = (name, color, opts = {}) => {
-      const m = new BABYLON.StandardMaterial(name, scene);
-      m.diffuseColor = color;
-      if (opts.alpha !== undefined) m.alpha = opts.alpha;
-      if (opts.specular !== undefined) m.specularColor = opts.specular;
-      else m.specularColor = C(0.05, 0.05, 0.05);
-      return m;
-    };
-    p = {
-      wood:        make("prefab.wood",        C(0.45, 0.30, 0.18)),
-      woodDark:    make("prefab.woodDark",    C(0.30, 0.20, 0.12)),
-      soil:        make("prefab.soil",        C(0.22, 0.14, 0.08)),
-      terracotta:  make("prefab.terracotta",  C(0.78, 0.43, 0.30)),
-      plasticBlack:make("prefab.plasticBlack",C(0.20, 0.20, 0.22)),
-      metal:       make("prefab.metal",       C(0.70, 0.70, 0.75), { specular: C(0.40, 0.40, 0.45) }),
-      glass:       make("prefab.glass",       C(0.85, 0.92, 0.95), { alpha: 0.35 }),
-      // Phase 6.0 — house primitives. Floors get a warm wood tone (the user can re-tint
-      // per-instance via the Style button); walls are a warm drywall white. Door + window
-      // accents reuse `wood` and a sky-blue translucent glass respectively. We keep these in
-      // the shared cache so all walls in a scene share one StandardMaterial — important for
-      // the cut-away toggle, which mutates `mat.alpha` once per material to fade every wall
-      // in lockstep without per-mesh fiddling.
-      houseFloor:  make("prefab.houseFloor",  C(0.70, 0.65, 0.55)),
-      houseWall:   make("prefab.houseWall",   C(0.92, 0.90, 0.86)),
-      houseDoor:   make("prefab.houseDoor",   C(0.45, 0.30, 0.18)),
-      houseGlass:  make("prefab.houseGlass",  C(0.55, 0.75, 0.92), { alpha: 0.5 }),
-    };
+    const fancy = !!window.OpenHarvestFancy;
+    if (fancy) {
+      const makePBR = (name, color, opts = {}) => {
+        const m = new BABYLON.PBRMaterial(name, scene);
+        m.albedoColor = color;
+        m.metallic = (opts.metallic !== undefined) ? opts.metallic : 0;
+        m.roughness = (opts.roughness !== undefined) ? opts.roughness : 0.9;
+        if (opts.alpha !== undefined) {
+          m.alpha = opts.alpha;
+          m.transparencyMode = BABYLON.PBRMaterial.PBRMATERIAL_ALPHABLEND;
+        }
+        // Tame raw PBR brightness on cheap diffuse colors. envIntensity follows the scene
+        // env texture; setting < 1 keeps reflections from blowing out indoor wood/soil.
+        m.environmentIntensity = 1.0;
+        return m;
+      };
+      p = {
+        wood:         makePBR("prefab.wood",         C(0.45, 0.30, 0.18), { roughness: 0.9 }),
+        woodDark:     makePBR("prefab.woodDark",     C(0.30, 0.20, 0.12), { roughness: 0.9 }),
+        soil:         makePBR("prefab.soil",         C(0.22, 0.14, 0.08), { roughness: 1.0 }),
+        terracotta:   makePBR("prefab.terracotta",   C(0.78, 0.43, 0.30), { roughness: 0.85 }),
+        plasticBlack: makePBR("prefab.plasticBlack", C(0.20, 0.20, 0.22), { roughness: 0.6 }),
+        metal:        makePBR("prefab.metal",        C(0.78, 0.78, 0.82), { metallic: 0.85, roughness: 0.3 }),
+        glass:        makePBR("prefab.glass",        C(0.85, 0.92, 0.95), { metallic: 0,    roughness: 0.2, alpha: 0.35 }),
+        houseFloor:   makePBR("prefab.houseFloor",   C(0.70, 0.65, 0.55), { roughness: 0.85 }),
+        houseWall:    makePBR("prefab.houseWall",    C(0.92, 0.90, 0.86), { roughness: 0.9 }),
+        houseDoor:    makePBR("prefab.houseDoor",    C(0.45, 0.30, 0.18), { roughness: 0.85 }),
+        houseGlass:   makePBR("prefab.houseGlass",   C(0.55, 0.75, 0.92), { metallic: 0,    roughness: 0.15, alpha: 0.5 }),
+      };
+    } else {
+      const make = (name, color, opts = {}) => {
+        const m = new BABYLON.StandardMaterial(name, scene);
+        m.diffuseColor = color;
+        if (opts.alpha !== undefined) m.alpha = opts.alpha;
+        if (opts.specular !== undefined) m.specularColor = opts.specular;
+        else m.specularColor = C(0.05, 0.05, 0.05);
+        return m;
+      };
+      p = {
+        wood:        make("prefab.wood",        C(0.45, 0.30, 0.18)),
+        woodDark:    make("prefab.woodDark",    C(0.30, 0.20, 0.12)),
+        soil:        make("prefab.soil",        C(0.22, 0.14, 0.08)),
+        terracotta:  make("prefab.terracotta",  C(0.78, 0.43, 0.30)),
+        plasticBlack:make("prefab.plasticBlack",C(0.20, 0.20, 0.22)),
+        metal:       make("prefab.metal",       C(0.70, 0.70, 0.75), { specular: C(0.40, 0.40, 0.45) }),
+        glass:       make("prefab.glass",       C(0.85, 0.92, 0.95), { alpha: 0.35 }),
+        // Phase 6.0 — house primitives. Floors get a warm wood tone (the user can re-tint
+        // per-instance via the Style button); walls are a warm drywall white. Door + window
+        // accents reuse `wood` and a sky-blue translucent glass respectively. We keep these in
+        // the shared cache so all walls in a scene share one StandardMaterial — important for
+        // the cut-away toggle, which mutates `mat.alpha` once per material to fade every wall
+        // in lockstep without per-mesh fiddling.
+        houseFloor:  make("prefab.houseFloor",  C(0.70, 0.65, 0.55)),
+        houseWall:   make("prefab.houseWall",   C(0.92, 0.90, 0.86)),
+        houseDoor:   make("prefab.houseDoor",   C(0.45, 0.30, 0.18)),
+        houseGlass:  make("prefab.houseGlass",  C(0.55, 0.75, 0.92), { alpha: 0.5 }),
+      };
+    }
     matCache.set(scene, p);
     return p;
   }
@@ -428,10 +476,10 @@
     const shelf = B.MeshBuilder.CreateBox(name, {
       width: size.x, height: size.y, depth: size.z,
     }, scene);
-    const mat = new BABYLON.StandardMaterial(name + "_mat", scene);
-    mat.diffuseColor = new BABYLON.Color3(0.55, 0.42, 0.28); // wood
-    mat.specularColor = new BABYLON.Color3(0.05, 0.05, 0.05);
-    shelf.material = mat;
+    // Phase 5.7 — share the palette wood material instead of minting a one-off StandardMaterial
+    // so the fancy/non-fancy switch picks the right shading model in one place. Per-instance
+    // tints (Style button) clone before mutating, so sharing here is safe.
+    shelf.material = p.wood;
     shelf.position.y = size.y / 2;
     shelf.metadata = shelf.metadata || {};
     shelf.metadata.isShelf = true;

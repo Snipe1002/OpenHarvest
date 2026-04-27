@@ -49,6 +49,9 @@ appsettings.Local.json
 .env.local
 .env.*.local
 *.env
+# Phase 5.7 — vendored Babylon prefiltered HDRI for PBR image-based lighting. The .env
+# extension collides with dotenv-style secret files above; whitelist the lib asset back in.
+!src/OpenHarvest.API/wwwroot/lib/env.env
 
 # Logs
 *.log
