@@ -102,7 +102,7 @@
     }
 
     /* floating advisor buttons */
-    #askButton, #calendarButton {
+    #askButton, #calendarButton, #settingsButton {
       position: fixed;
       top: env(safe-area-inset-top, 8px);
       background: var(--panel); color: var(--text);
@@ -112,9 +112,92 @@
     }
     #askButton { right: 8px; }
     #calendarButton { right: 92px; }
+    /* Phase 5.1: gear sits left of Calendar so the row reads (left → right):
+       ⚙ Settings · 📅 Calendar · 🌱 Ask. Width is roughly 80px per pill. */
+    #settingsButton { right: 176px; padding: 8px 12px; }
     #askButton:active, #askButton.active,
-    #calendarButton:active, #calendarButton.active { background: var(--panel-hover); color: var(--accent); }
+    #calendarButton:active, #calendarButton.active,
+    #settingsButton:active, #settingsButton.active { background: var(--panel-hover); color: var(--accent); }
     #askButton.unconfigured, #calendarButton.unconfigured { opacity: 0.5; }
+
+    /* Phase 5.1: compass overlay. Sits below the floating buttons so it doesn't
+       overlap the Ask/Calendar/Settings row (~48px tall). The whole element rotates
+       so N stays aligned with scene-north as the camera spins. */
+    #compass {
+      position: fixed;
+      top: calc(env(safe-area-inset-top, 8px) + 52px);
+      right: 12px;
+      width: 70px; height: 70px;
+      border-radius: 50%;
+      background: rgba(20, 20, 24, 0.78);
+      border: 1px solid var(--border);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+      pointer-events: none;
+      z-index: 25;
+      will-change: transform;
+    }
+    #compass .needle {
+      position: absolute; left: 50%; top: 8px;
+      width: 0; height: 0;
+      border-left: 6px solid transparent;
+      border-right: 6px solid transparent;
+      border-bottom: 24px solid var(--accent);
+      transform: translateX(-50%);
+    }
+    #compass .needle.tail {
+      top: auto; bottom: 8px;
+      border-bottom: 0;
+      border-top: 24px solid var(--text-dim);
+    }
+    #compass span {
+      position: absolute;
+      font-size: 11px; font-weight: 700;
+      color: var(--text);
+      width: 16px; text-align: center;
+    }
+    #compass .n { top: -2px; left: 27px; color: var(--accent); }
+    #compass .s { bottom: -2px; left: 27px; }
+    #compass .e { right: -2px; top: 27px; }
+    #compass .w { left: -2px; top: 27px; }
+
+    /* Phase 5.1: sun phase pill, anchored top-left next to the status text. */
+    #sunPhase {
+      position: fixed;
+      top: env(safe-area-inset-top, 8px);
+      left: 8px;
+      transform: translateY(28px);
+      background: rgba(0,0,0,0.55);
+      padding: 4px 10px; border-radius: 6px;
+      font-size: 12px;
+      pointer-events: none;
+      max-width: 60vw;
+      white-space: nowrap;
+    }
+    #sunPhase.hidden { display: none; }
+
+    /* Phase 5.1: settings modal layout — stacked sections, decimal inputs,
+       a "use my location" helper button, and a small lat/lng-missing warning. */
+    .settings-section { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+    .settings-section label {
+      font-size: 11px; color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .settings-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .settings-help {
+      margin-top: 8px;
+      padding: 8px 10px; border-radius: 6px;
+      background: rgba(248, 113, 113, 0.10);
+      border: 1px solid rgba(248, 113, 113, 0.35);
+      color: var(--danger); font-size: 12px;
+    }
+    .settings-help.hidden { display: none; }
+    .settings-locate {
+      padding: 8px 12px; font-size: 13px;
+      background: var(--bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+    }
+    .settings-locate:hover { background: var(--panel-hover); }
+    .settings-locate:disabled { opacity: 0.5; cursor: default; }
 
     /* nudge banners */
     #nudges {
@@ -321,8 +404,15 @@
 <body>
   <canvas id="renderCanvas"></canvas>
   <div id="status">loading...</div>
+  <div id="sunPhase" class="hidden"></div>
   <button id="askButton" title="Ask the master gardener">🌱 Ask</button>
   <button id="calendarButton" title="Generate a planting calendar">📅 Calendar</button>
+  <button id="settingsButton" title="Garden settings (location)">⚙</button>
+  <div id="compass" aria-hidden="true">
+    <div class="needle"></div>
+    <div class="needle tail"></div>
+    <span class="n">N</span><span class="e">E</span><span class="s">S</span><span class="w">W</span>
+  </div>
   <div id="nudges"></div>
   <div id="buttons">
     <button data-mode="bed">Bed</button>
@@ -347,6 +437,8 @@
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <script src="https://cdn.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
+  <!-- Phase 5.1: SunCalc is vendored locally (lib/suncalc.js) — no CDN, MIT-licensed. -->
+  <script src="lib/suncalc.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

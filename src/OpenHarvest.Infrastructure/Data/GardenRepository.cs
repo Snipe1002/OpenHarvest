@@ -20,6 +20,13 @@ public class GardenRepository : IGardenRepository
         return garden;
     }
 
+    public async Task<Garden> UpdateAsync(Garden garden, CancellationToken ct = default)
+    {
+        _db.Gardens.Update(garden);
+        await _db.SaveChangesAsync(ct);
+        return garden;
+    }
+
     public Task<List<Guid>> ListGardenIdsAsync(CancellationToken ct = default) =>
         _db.Gardens.AsNoTracking().Select(g => g.Id).ToListAsync(ct);
 
