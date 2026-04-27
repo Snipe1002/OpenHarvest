@@ -3474,6 +3474,14 @@
           Set your location for an accurate sun position. Defaults to ${DEFAULT_LAT.toFixed(1)} / ${DEFAULT_LNG.toFixed(1)}.
         </div>
       </div>
+      <!-- Phase 5.6: portable scene export. GLB is the standard glTF binary format Blender,
+           Three.js, Unity, and most viewers open natively. The Babylon-native .babylon JSON
+           dump is offered alongside as a lighter format for Babylon-only round-tripping. -->
+      <div class="settings-section">
+        <label>Export</label>
+        <button class="settings-locate" data-act="export-glb">📦 Export Scene (.glb)</button>
+        <button class="settings-locate" data-act="export-babylon">📄 Export Scene (.babylon JSON)</button>
+      </div>
       <div class="modal-actions">
         <button data-act="cancel">Close</button>
         <button class="primary" data-act="save">Save</button>
@@ -3514,6 +3522,72 @@
         { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
       );
     });
+
+    // Phase 5.6: portable scene export. GLB is the headline format; .babylon JSON is offered
+    // as a lighter Babylon-native dump. Both filter to entity meshes only via shouldExportNode.
+    const exportGlbBtn = modal.querySelector('[data-act="export-glb"]');
+    if (exportGlbBtn) {
+      exportGlbBtn.addEventListener("click", async () => {
+        if (!window.BABYLON || !BABYLON.GLTF2Export) {
+          setStatus("glTF serializer not loaded");
+          return;
+        }
+        const filename = `openharvest-${(gardenId || "garden").slice(0, 8)}-${new Date().toISOString().slice(0, 10)}`;
+        // Filter: only entity meshes (those with metadata.entityId) + their descendants. The
+        // ground, snap grid, sun, compass, and ghost pins are intentionally excluded.
+        const options = {
+          shouldExportNode: (node) => {
+            if (node?.metadata?.entityId) return true;
+            let p = node?.parent;
+            while (p) {
+              if (p.metadata?.entityId) return true;
+              p = p.parent;
+            }
+            return false;
+          }
+        };
+        exportGlbBtn.disabled = true;
+        const oldLabel = exportGlbBtn.textContent;
+        exportGlbBtn.textContent = "Exporting…";
+        try {
+          const glb = await BABYLON.GLTF2Export.GLBAsync(scene, filename, options);
+          glb.downloadFiles();
+          setStatus("scene exported");
+        } catch (e) {
+          console.error("glb export failed", e);
+          setStatus("export failed");
+        } finally {
+          exportGlbBtn.disabled = false;
+          exportGlbBtn.textContent = oldLabel;
+        }
+      });
+    }
+    const exportBabylonBtn = modal.querySelector('[data-act="export-babylon"]');
+    if (exportBabylonBtn) {
+      exportBabylonBtn.addEventListener("click", () => {
+        if (!window.BABYLON || !BABYLON.SceneSerializer) {
+          setStatus("scene serializer unavailable");
+          return;
+        }
+        try {
+          const data = BABYLON.SceneSerializer.Serialize(scene);
+          const json = JSON.stringify(data);
+          const blob = new Blob([json], { type: "application/babylon" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `openharvest-${(gardenId || "garden").slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.babylon`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          setStatus("scene exported");
+        } catch (e) {
+          console.error("babylon export failed", e);
+          setStatus("export failed");
+        }
+      });
+    }
 
     const close = () => closeModal();
     backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) close(); });

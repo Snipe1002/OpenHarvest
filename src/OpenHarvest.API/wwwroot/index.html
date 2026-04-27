@@ -709,6 +709,9 @@
 
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <script src="https://cdn.babylonjs.com/materialsLibrary/babylonjs.materials.min.js"></script>
+  <!-- Phase 5.6: glTF/GLB serializer. Exposes BABYLON.GLTF2Export for the "Export Scene"
+       button in the settings modal. Same Babylon CDN as the main library. -->
+  <script src="https://cdn.babylonjs.com/serializers/babylonjs.serializers.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
   <!-- Phase 5.1: SunCalc is vendored locally (lib/suncalc.js) — no CDN, MIT-licensed. -->
   <script src="lib/suncalc.js"></script>
@@ -717,7 +720,7 @@
   <!-- Phase 5.2.2: cache-bust suffix bumps with each UX-polish revision so iPhone Safari
        (which aggressively caches JS) picks up the new build without a full app reset. Bump
        the number whenever app.js, prefabs.js, or this file changes. -->
-  <script src="lib/prefabs.js?v=605"></script>
-  <script src="app.js?v=605"></script>
+  <script src="lib/prefabs.js?v=606"></script>
+  <script src="app.js?v=606"></script>
 </body>
 </html>
