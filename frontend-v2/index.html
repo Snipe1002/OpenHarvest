@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>OpenHarvest v2</title>
+    <style>
+      html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+      body { background: #1a1a1a; color: #ddd; font-family: system-ui, sans-serif; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // Fallback shim for Node-style `process` references in third-party
+      // bundles (Pascal's viewer reads process.env.NODE_ENV directly).
+      // Vite's `define` handles the literal `process.env.NODE_ENV` token at
+      // build time, but this catches any other process.* access at runtime.
+      if (typeof window.process === 'undefined') {
+        window.process = { env: {} };
+      }
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

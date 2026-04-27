@@ -10,6 +10,8 @@
 
 ---
 
+> **v2 is now the canonical frontend.** It lives in [`frontend-v2/`](frontend-v2/README.md) (React 19 + Three.js via R3F + Pascal Editor's `<Viewer>`). The v1 Babylon.js PWA is still in `src/OpenHarvest.API/wwwroot/` but no longer routed in production. See [`docs/v2-architecture.md`](docs/v2-architecture.md) for the architecture and [`docs/deployment.md`](docs/deployment.md) for the runbook.
+
 ## What is OpenHarvest?
 
 OpenHarvest is a free, open-source platform that puts an AI master gardener in everyone's pocket — for free, forever. The interaction starts as a simple drag-and-drop garden designer in the browser. As you use it, it quietly becomes a precision tracking and advisory platform that learns from your photos, your harvests, and your local conditions.
@@ -55,15 +57,16 @@ OpenHarvest has four layers. Each is invisible until you invoke it. A casual use
 | Live Sync | SignalR with Redis backplane |
 | Caching | Redis |
 | AI Integration | Pluggable `IAiProvider` — Claude, OpenAI, or Ollama (self-hosted) |
-| Web Frontend | PWA (HTML + JS, service worker for offline) + Babylon.js for 3D canvas |
+| Web Frontend (v2, canonical) | Vite + React 19 + TypeScript + Three.js (R3F) + Pascal Editor's `<Viewer>` for buildings — see [`frontend-v2/`](frontend-v2/README.md) |
+| Web Frontend (v1, legacy) | PWA (HTML + JS, service worker for offline) + Babylon.js — still embedded in `src/OpenHarvest.API/wwwroot/` but unrouted |
 | Photo Storage | MinIO (S3-compatible) — portable to real S3 / Cloudflare R2 |
 | Background Jobs | .NET BackgroundService host (worker process) |
 | Ingress | Traefik (TLS termination, sticky WebSocket routing) |
 | Containerization | Docker Compose (single-host) / Docker Swarm (federated public instance) |
 
-**Why PWA, not native:** You don't need to install anything. The app opens from a URL. No App Store gate, no platform fragmentation, the same app runs everywhere — phone, tablet, desktop, Quest 3.
+**Why a browser app, not native:** You don't need to install anything. The app opens from a URL. No App Store gate, no platform fragmentation, the same app runs everywhere — phone, tablet, desktop, Quest 3.
 
-**Why Babylon.js:** Lighter than Cesium at backyard scale, mature WebXR support for Quest 3 walkthroughs, clean asset pipeline.
+**Why React Three Fiber + Pascal Editor's `<Viewer>` (v2):** Pascal already has a polished R3F viewer with good lighting, navigation, and a Zod-validated building schema (walls / doors / windows / slabs). Mounting our garden components as R3F children of `<Viewer>` gives us unified scene + lighting + shadows for free, without forking Pascal's schema. See [`docs/v2-architecture.md`](docs/v2-architecture.md). The legacy Babylon.js v1 was lighter than Cesium at backyard scale and had decent WebXR — those tradeoffs are preserved as fallback.
 
 ---
 
@@ -83,7 +86,15 @@ cd OpenHarvest
 docker-compose up
 ```
 
-The PWA will be available at `http://localhost:5000`. No login required — start designing.
+The backend API will come up on `http://localhost:5000`. To run the v2 frontend locally, in a separate shell:
+
+```bash
+cd frontend-v2
+npm install
+npm run dev
+```
+
+Then open the printed dev URL (defaults to `http://localhost:5174`). The deployed v2 build lives at [`https://nexus.tail1b8bd8.ts.net/openharvest/`](https://nexus.tail1b8bd8.ts.net/openharvest/) — see [`docs/deployment.md`](docs/deployment.md) for the runbook.
 
 See [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) for full setup details and AI provider configuration.
 
@@ -97,10 +108,11 @@ OpenHarvest/
 │   ├── OpenHarvest.Domain/           # GardenEntity, components, IAiProvider
 │   ├── OpenHarvest.Application/       # Use cases, command handlers
 │   ├── OpenHarvest.Infrastructure/    # EF Core, MinIO, AI providers, OpenFarm sync
-│   ├── OpenHarvest.API/               # ASP.NET Core REST + SignalR + PWA assets
+│   ├── OpenHarvest.API/               # ASP.NET Core REST + SignalR (wwwroot/ holds legacy v1 PWA)
 │   └── OpenHarvest.Worker/            # Background jobs: OpenFarm sync, advisor, photo processing
+├── frontend-v2/                       # Canonical v2 frontend — Vite + React 19 + R3F + Pascal Viewer
 ├── tests/
-├── docs/                              # Architecture, UX, API, deployment guides
+├── docs/                              # Architecture, UX, API, deployment guides (incl. v2-architecture.md, deployment.md)
 ├── seed-data/                         # OpenFarm CC0 crop database
 ├── docker-compose.yml
 └── README.md
@@ -112,7 +124,7 @@ OpenHarvest/
 
 | Phase | Focus | Demoable result |
 |---|---|---|
-| **Phase 0** | Skeleton | API + Postgres up, Babylon scene with one hard-coded plant |
+| **Phase 0** | Skeleton | API + Postgres up, 3D scene with one hard-coded plant (v1 used Babylon; v2 uses R3F + Pascal Viewer) |
 | **Phase 1** | Canvas MVP | Drag-and-drop beds + plants, OpenFarm autocomplete, autosave |
 | **Phase 2** | Photos & Journal | Camera capture, MinIO storage, photo strip per entity |
 | **Phase 3** | Live Sync | Two devices share a garden in real time via SignalR |
@@ -147,7 +159,7 @@ Every garden designed adds to the open dataset. Every photo trains the diagnosis
 
 ## Contributing
 
-OpenHarvest is actively seeking contributors. Whether you're a .NET developer, a frontend engineer (Babylon.js / PWA), a gardening expert, or someone passionate about food security — there's a place for you here.
+OpenHarvest is actively seeking contributors. Whether you're a .NET developer, a frontend engineer (React / Three.js / R3F for v2; Babylon.js if you want to maintain the legacy v1 PWA), a gardening expert, or someone passionate about food security — there's a place for you here.
 
 Read the [Contributing Guide](CONTRIBUTING.md) to get started.
 
@@ -161,10 +173,13 @@ MIT — free to use, modify, and distribute. The crop seed data is licensed CC0 
 
 ## Links
 
+- [v2 Frontend Architecture](docs/v2-architecture.md) — the compositional bet, data domains, picking contract
+- [v2 Deployment Runbook](docs/deployment.md) — Caddy, bind-mount gotchas, rollback
+- [Frontend v2 README](frontend-v2/README.md) — local dev + code layout
 - [Architecture](docs/ARCHITECTURE.md) — 4-layer system design
 - [Data Model](docs/DATA_MODEL.md) — single `GardenEntity` with components
 - [UX Flow](docs/UX.md) — the casual-user experience that drives the design
-- [Deployment](docs/DEPLOY.md) — single-host Compose and federated Swarm topologies
+- [Deployment (legacy notes)](docs/DEPLOY.md) — single-host Compose and federated Swarm topologies
 - [AI Integration](docs/AI_INTEGRATION.md) — provider-agnostic advisor layer
 - [API Reference](docs/API.md)
 - [Getting Started](docs/GETTING_STARTED.md)
