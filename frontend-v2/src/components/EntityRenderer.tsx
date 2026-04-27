@@ -17,10 +17,12 @@
  * obviously bogus (NaN), we log a warning and skip the entity so a single
  * malformed record can't break the whole scene.
  */
-import { Text } from '@react-three/drei'
+import { Outlines, Text } from '@react-three/drei'
+import type { ThreeEvent } from '@react-three/fiber'
 import DemoBed from './DemoBed'
 import DemoPlant from './DemoPlant'
 import type { GardenEntity, Vector3 } from '../api/types'
+import { useGarden } from '../store/garden'
 
 const BED_PREFABS = new Set(['raised-bed-wood', 'square-planter'])
 const PLANT_PREFABS = new Set(['tomato-cage'])
@@ -88,13 +90,20 @@ export default function EntityRenderer({ entity }: { entity: GardenEntity }) {
 }
 
 function PrefabPlaceholder({ entity }: { entity: GardenEntity }) {
+  const selectEntity = useGarden((s) => s.selectEntity)
+  const isSelected = useGarden((s) => s.selectedEntityId === entity.id)
   const { x, y, z } = entity.transform.position
   const slug = entity.geometry.prefabRef ?? entity.kind
+  const handleSelect = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation()
+    selectEntity(entity.id)
+  }
   return (
-    <group position={[x, y, z]}>
+    <group position={[x, y, z]} onPointerDown={handleSelect}>
       <mesh position={[0, 0.25, 0]} castShadow receiveShadow>
         <boxGeometry args={[0.5, 0.5, 0.5]} />
         <meshStandardMaterial color="#a08c5e" roughness={0.6} metalness={0} />
+        {isSelected && <Outlines thickness={4} color="#ffaa00" />}
       </mesh>
       <Text
         position={[0, 0.85, 0]}
@@ -110,14 +119,21 @@ function PrefabPlaceholder({ entity }: { entity: GardenEntity }) {
 }
 
 function UnknownDebugCube({ entity }: { entity: GardenEntity }) {
+  const selectEntity = useGarden((s) => s.selectEntity)
+  const isSelected = useGarden((s) => s.selectedEntityId === entity.id)
   const { x, y, z } = entity.transform.position
   // Show whatever is most descriptive — prefer prefab slug, fall back to kind.
   const label = entity.geometry.prefabRef ?? `${entity.kind}:${entity.geometry.kind}`
+  const handleSelect = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation()
+    selectEntity(entity.id)
+  }
   return (
-    <group position={[x, y, z]}>
+    <group position={[x, y, z]} onPointerDown={handleSelect}>
       <mesh position={[0, 0.15, 0]} castShadow>
         <boxGeometry args={[0.3, 0.3, 0.3]} />
         <meshStandardMaterial color="#ff00ff" roughness={0.5} metalness={0} />
+        {isSelected && <Outlines thickness={4} color="#ffaa00" />}
       </mesh>
       <Text
         position={[0, 0.55, 0]}

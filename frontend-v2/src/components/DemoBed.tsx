@@ -10,11 +10,18 @@
  * *bottom* of the frame (matching the original demo contract). Frame
  * thickness is fixed at 0.05m. Soil sits 0.02m below the frame top.
  *
+ * Selection (milestone #3): clicking any plank or the soil sets the entity
+ * as the active selection in the Zustand store. When selected, a drei
+ * `<Outlines>` wireframe overlay highlights the bed group.
+ *
  * The "Demo" name is intentional — milestone #3 will replace this with a
  * full prefab catalog. Until then, every bed-shaped entity routes through
  * here.
  */
+import { Outlines } from '@react-three/drei'
+import type { ThreeEvent } from '@react-three/fiber'
 import type { GardenEntity } from '../api/types'
+import { useGarden } from '../store/garden'
 
 interface DemoBedProps {
   entity: GardenEntity
@@ -29,6 +36,9 @@ function resolveSize(entity: GardenEntity): [number, number, number] {
 }
 
 export default function DemoBed({ entity }: DemoBedProps) {
+  const selectEntity = useGarden((s) => s.selectEntity)
+  const isSelected = useGarden((s) => s.selectedEntityId === entity.id)
+
   const { x: px, y: py, z: pz } = entity.transform.position
   const [w, h, l] = resolveSize(entity)
   const t = 0.05 // plank thickness
@@ -38,27 +48,36 @@ export default function DemoBed({ entity }: DemoBedProps) {
   const cy = py + h / 2
   const cz = pz
 
+  const handleSelect = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation()
+    selectEntity(entity.id)
+  }
+
   return (
-    <group>
+    <group onPointerDown={handleSelect}>
       {/* +X plank */}
       <mesh position={[cx + w / 2 - t / 2, cy, cz]} castShadow receiveShadow>
         <boxGeometry args={[t, h, l]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
+        {isSelected && <Outlines thickness={4} color="#ffaa00" />}
       </mesh>
       {/* -X plank */}
       <mesh position={[cx - w / 2 + t / 2, cy, cz]} castShadow receiveShadow>
         <boxGeometry args={[t, h, l]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
+        {isSelected && <Outlines thickness={4} color="#ffaa00" />}
       </mesh>
       {/* +Z plank */}
       <mesh position={[cx, cy, cz + l / 2 - t / 2]} castShadow receiveShadow>
         <boxGeometry args={[w, h, t]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
+        {isSelected && <Outlines thickness={4} color="#ffaa00" />}
       </mesh>
       {/* -Z plank */}
       <mesh position={[cx, cy, cz - l / 2 + t / 2]} castShadow receiveShadow>
         <boxGeometry args={[w, h, t]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
+        {isSelected && <Outlines thickness={4} color="#ffaa00" />}
       </mesh>
       {/* Soil — slightly inset, top sits 0.02m below frame top */}
       <mesh position={[cx, py + h - 0.02 - (h - 0.04) / 2, cz]} receiveShadow>
