@@ -4,9 +4,10 @@ import { CameraControls } from '@react-three/drei'
 import AddToolbar from './components/AddToolbar'
 import ClearHouseButton from './components/ClearHouseButton'
 import DemoGround from './components/DemoGround'
-import EditPanel from './components/EditPanel'
 import EntityRenderer from './components/EntityRenderer'
+import InspectorCard from './components/InspectorCard'
 import SampleBuilding from './components/SampleBuilding'
+import ToastBar from './components/ToastBar'
 import { listGardenIds } from './api/client'
 import { connect, disconnect } from './api/signalr'
 import { useGarden } from './store/garden'
@@ -15,25 +16,26 @@ import { useGarden } from './store/garden'
  * App root: full-viewport Pascal Viewer with our garden components mounted as
  * R3F siblings inside Pascal's scene.
  *
- * Wiring (milestone #2):
- *  1. On mount: if a garden id is persisted in localStorage, re-load it.
- *     Otherwise fetch the server's garden id list and pick the first.
- *  2. Whenever `currentGardenId` changes, open a SignalR connection and
- *     join that garden's group. Live entity upserts/deletes flow into the
- *     Zustand store automatically.
- *  3. Render every entity from the store via `<EntityRenderer>`, which
- *     dispatches to the right primitive (bed / plant / placeholder).
+ * Wiring:
+ *   1. On mount: if a garden id is persisted in localStorage, re-load it;
+ *      otherwise fetch the server's id list and pick the first.
+ *   2. Whenever `currentGardenId` changes, open a SignalR connection and
+ *      join that garden's group. Live entity upserts/deletes flow into the
+ *      Zustand store automatically.
+ *   3. Render every entity from the store via `<EntityRenderer>`.
+ *   4. `<InspectorCard>` is a single drei `<Html>` anchored above the
+ *      currently-selected entity. Auto-hides when nothing is selected.
+ *      Replaces the previous fixed-position EditPanel.
  *
- * `SampleBuilding` still seeds Pascal's scene store with a placeholder room
- * so the viewer renders something on first paint. Milestone #3+ will replace
- * it with backend-driven structures.
+ * `SampleBuilding` seeds Pascal's scene store with a placeholder room — Pascal's
+ * Viewer requires building geometry to render anything. The `<ClearHouseButton>`
+ * wipes those walls at runtime.
  */
 export default function App() {
   const currentGardenId = useGarden((s) => s.currentGardenId)
   const setCurrentGarden = useGarden((s) => s.setCurrentGarden)
   const entities = useGarden((s) => s.entities)
 
-  // 1. Pick / load garden on mount.
   useEffect(() => {
     let cancelled = false
     if (currentGardenId) {
@@ -50,12 +52,9 @@ export default function App() {
     return () => {
       cancelled = true
     }
-    // We deliberately want the bootstrap effect to only run on mount.
-    // currentGardenId changes are handled by the SignalR effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 2. SignalR connection — opens / switches whenever the active garden changes.
   useEffect(() => {
     if (!currentGardenId) return
     let cancelled = false
@@ -77,11 +76,14 @@ export default function App() {
         {Object.values(entities).map((e) => (
           <EntityRenderer key={e.id} entity={e} />
         ))}
+        {/* Inspector is anchored to the selected entity in 3D space — drei's
+            Html mounts it as DOM but tracks the world position. */}
+        <InspectorCard />
       </Viewer>
-      {/* HTML overlays — siblings of the Viewer canvas, not R3F children. */}
+      {/* HTML overlays — siblings of the Viewer canvas. */}
       <ClearHouseButton />
       <AddToolbar />
-      <EditPanel />
+      <ToastBar />
     </div>
   )
 }
