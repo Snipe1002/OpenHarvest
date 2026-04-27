@@ -7,6 +7,7 @@
  * lived alongside the toolbar historically.
  */
 import { type AnyNodeId, DoorNode, useScene, WallNode, WindowNode } from '@pascal-app/core'
+import type { AABB } from './aabbHelpers'
 
 function findLevelId(): AnyNodeId | null {
   const nodes = Object.values(useScene.getState().nodes)
@@ -22,6 +23,85 @@ function findLevelId(): AnyNodeId | null {
 export function snapXZ(x: number, z: number, snap: number | null): [number, number] {
   if (!snap) return [x, z]
   return [Math.round(x / snap) * snap, Math.round(z / snap) * snap]
+}
+
+/**
+ * Edge-relative magnet snap for entity translate drags.
+ *
+ * For each axis (X and Z) independently, compute candidate positions that
+ * place the dragged entity's edge exactly `snap` meters from a neighbor's
+ * edge. If the closest candidate is within MAGNET_RANGE of the raw pointer
+ * position on that axis, snap to it; otherwise fall back to grid snap
+ * (multiples of `snap`, the prior behavior).
+ *
+ * This fixes the overlap bug from plain grid snap: with `snap=1m` and two
+ * 4-foot (~1.22m) beds, plain grid snap puts centers 1m apart while edges
+ * span ±0.61m → overlap. Magnet snap places edges 1m apart instead, leaving
+ * a 1m gap.
+ *
+ * Special cases:
+ *   - `snap === null`: snap fully off, returns raw position (no magnet).
+ *   - `snap === 0`: edges TOUCH (zero gap). The candidate formula
+ *     `n.x1 + 0 + myHalfWidth` still works; we still magnet to neighbors,
+ *     but skip the grid-snap fallback (no quantization grid at 0m).
+ *
+ * @param rawX           Raw raycast hit X (meters).
+ * @param rawZ           Raw raycast hit Z (meters).
+ * @param myHalfWidth    Half size on world X axis of the dragged entity.
+ * @param myHalfDepth    Half size on world Z axis of the dragged entity.
+ * @param snap           Snap distance (gap between edges) or null for off.
+ * @param neighbors      AABBs of OTHER entities to magnet to. Caller filters.
+ */
+export function snapXZWithMagnet(
+  rawX: number,
+  rawZ: number,
+  myHalfWidth: number,
+  myHalfDepth: number,
+  snap: number | null,
+  neighbors: AABB[],
+): [number, number] {
+  // No snap at all — pure free movement.
+  if (snap === null) return [rawX, rawZ]
+
+  // Default fallback: grid snap to multiples of `snap`. Skip when snap===0
+  // because a 0-meter grid would divide by zero.
+  let bestX = snap > 0 ? Math.round(rawX / snap) * snap : rawX
+  let bestZ = snap > 0 ? Math.round(rawZ / snap) * snap : rawZ
+  let bestDX = Math.abs(rawX - bestX)
+  let bestDZ = Math.abs(rawZ - bestZ)
+
+  // Magnet range: how close raw-X must be to a neighbor candidate to take it.
+  // - 1.5× snap so a small gap dominates the grid candidate when it should
+  // - my half-size so a wide bed magnets across its own footprint
+  // - 0.3m floor so snap=0 (edges touch) still attracts within a sane window
+  const MAGNET_RANGE = Math.max(snap * 1.5, myHalfWidth, myHalfDepth, 0.3)
+
+  for (const n of neighbors) {
+    // X-axis: my entity sits to the +X (right) of neighbor → my left edge
+    // = neighbor's right edge + snap. Or to the -X (left), with the
+    // mirrored relation. In both cases my CENTER must be at:
+    const cxRight = n.x1 + snap + myHalfWidth
+    const cxLeft = n.x0 - snap - myHalfWidth
+    for (const cx of [cxRight, cxLeft]) {
+      const d = Math.abs(rawX - cx)
+      if (d < MAGNET_RANGE && d < bestDX) {
+        bestX = cx
+        bestDX = d
+      }
+    }
+    // Z-axis: same reasoning along world Z.
+    const czFar = n.z1 + snap + myHalfDepth
+    const czNear = n.z0 - snap - myHalfDepth
+    for (const cz of [czFar, czNear]) {
+      const d = Math.abs(rawZ - cz)
+      if (d < MAGNET_RANGE && d < bestDZ) {
+        bestZ = cz
+        bestDZ = d
+      }
+    }
+  }
+
+  return [bestX, bestZ]
 }
 
 /**

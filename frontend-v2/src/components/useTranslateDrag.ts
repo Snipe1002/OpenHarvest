@@ -41,6 +41,37 @@ import type { ThreeEvent } from '@react-three/fiber'
 import { ApiError, updateEntity } from '../api/client'
 import type { GardenEntity, Transform } from '../api/types'
 import { useGarden } from '../store/garden'
+import { type AABB, entityAABB } from './aabbHelpers'
+import { snapXZ, snapXZWithMagnet } from './houseHelpers'
+
+/**
+ * Half-width / half-depth of the dragged entity along world X/Z. Used as the
+ * "my edge offset from center" for magnet snap. Returns null if the entity
+ * has no AABB (Polygon, unsized prefab) — caller skips magnet entirely and
+ * falls back to plain grid snap.
+ */
+function entityHalfExtents(e: GardenEntity): { hw: number; hd: number } | null {
+  const box = entityAABB(e)
+  if (!box) return null
+  return { hw: (box.x1 - box.x0) / 2, hd: (box.z1 - box.z0) / 2 }
+}
+
+/**
+ * Collect AABBs of every entity in the store EXCEPT those listed in
+ * `excludeIds`. For single translate that's just the dragged entity; for
+ * group translate it's every entity moving together (so they don't magnet
+ * to each other mid-drag).
+ */
+function collectNeighborAABBs(excludeIds: Set<string>): AABB[] {
+  const { entities } = useGarden.getState()
+  const out: AABB[] = []
+  for (const e of Object.values(entities)) {
+    if (excludeIds.has(e.id)) continue
+    const box = entityAABB(e)
+    if (box) out.push(box)
+  }
+  return out
+}
 
 const GROUND_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 
@@ -101,12 +132,21 @@ export function useTranslateDrag(entity: GardenEntity): TranslateDragHandlers {
     const hit = new THREE.Vector3()
     if (!e.ray.intersectPlane(GROUND_PLANE, hit)) return
 
-    const { snap } = useGarden.getState()
-    let x = hit.x
-    let z = hit.z
-    if (snap) {
-      x = Math.round(x / snap) * snap
-      z = Math.round(z / snap) * snap
+    const { snap, snapMode } = useGarden.getState()
+    // Snap mode: 'edge' (default) prefers aligning the dragged entity's edge
+    // to a neighbor's edge with `snap` as the gap; falls back to grid snap
+    // when no neighbor is in range. 'center' just quantizes the entity's
+    // center to a fixed world grid (the original behavior).
+    let x: number
+    let z: number
+    if (snapMode === 'edge') {
+      const half = entityHalfExtents(entity)
+      const hw = half?.hw ?? 0
+      const hd = half?.hd ?? 0
+      const neighbors = collectNeighborAABBs(new Set([entity.id]))
+      ;[x, z] = snapXZWithMagnet(hit.x, hit.z, hw, hd, snap, neighbors)
+    } else {
+      ;[x, z] = snapXZ(hit.x, hit.z, snap)
     }
 
     // Preserve Y — translate is 2D. Y is edited via the inspector's number
@@ -196,10 +236,24 @@ export function useGroupTranslateDrag(entity: GardenEntity): TranslateDragHandle
     return groupTranslateActive && selectedEntityIds.includes(entity.id)
   }
 
-  const snapXZ = (x: number, z: number): { x: number; z: number } => {
-    const { snap } = useGarden.getState()
-    if (!snap) return { x, z }
-    return { x: Math.round(x / snap) * snap, z: Math.round(z / snap) * snap }
+  /**
+   * Magnet-aware snap for the LEADER entity (the one receiving pointerdown).
+   * Excludes every selected entity from the neighbor set so the group doesn't
+   * magnet to itself mid-drag. Falls back to plain grid snap when the leader
+   * has no AABB.
+   */
+  const snapLeaderXZ = (x: number, z: number): { x: number; z: number } => {
+    const { snap, snapMode, selectedEntityIds } = useGarden.getState()
+    if (snapMode === 'edge') {
+      const half = entityHalfExtents(entity)
+      const hw = half?.hw ?? 0
+      const hd = half?.hd ?? 0
+      const neighbors = collectNeighborAABBs(new Set(selectedEntityIds))
+      const [sx, sz] = snapXZWithMagnet(x, z, hw, hd, snap, neighbors)
+      return { x: sx, z: sz }
+    }
+    const [sx, sz] = snapXZ(x, z, snap)
+    return { x: sx, z: sz }
   }
 
   const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
@@ -223,7 +277,7 @@ export function useGroupTranslateDrag(entity: GardenEntity): TranslateDragHandle
     }
     dragRef.current = {
       pointerId: e.pointerId,
-      leaderStart: snapXZ(hit.x, hit.z),
+      leaderStart: snapLeaderXZ(hit.x, hit.z),
       originals,
     }
   }
@@ -235,7 +289,7 @@ export function useGroupTranslateDrag(entity: GardenEntity): TranslateDragHandle
 
     const hit = new THREE.Vector3()
     if (!e.ray.intersectPlane(GROUND_PLANE, hit)) return
-    const cur = snapXZ(hit.x, hit.z)
+    const cur = snapLeaderXZ(hit.x, hit.z)
     const dx = cur.x - drag.leaderStart.x
     const dz = cur.z - drag.leaderStart.z
 

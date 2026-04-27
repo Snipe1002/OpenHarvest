@@ -1,18 +1,24 @@
 /**
- * SnapChip — small fixed-position chip in the top-left corner showing the
- * current snap distance. Tap to cycle through the active unit system's snap
- * list.
+ * SnapChip — top-left dual chip showing the current snap distance AND mode.
+ * Two side-by-side mini-buttons in one rounded shell:
+ *
+ *   ┌────────────────────────┬──────┐
+ *   │ Snap: 1m               │ edge │
+ *   └────────────────────────┴──────┘
+ *
+ * Tap the value side to cycle through the active unit system's snap list.
+ * Tap the mode side to toggle 'edge' ↔ 'center'.
  *
  * Snap is honored by:
- *   - useTranslateDrag (entity drag-to-move quantizes x / z to the snap)
- *   - MainToolbar wall placement (corner clicks quantize to the snap)
+ *   - useTranslateDrag / useGroupTranslateDrag (entity drag-to-move).
+ *     'edge' magnets to neighbor edges with `snap` as the gap; 'center'
+ *     quantizes the dragged entity's center to a fixed world grid.
+ *   - MainToolbar wall placement (corner clicks always grid-snap).
  *
- * Snap state is persisted in localStorage by the store; this chip is a
- * pure UI control over `useGarden().snap` / `setSnap`. The cycle list and
- * label format depend on `useGarden().units` (metric vs imperial).
+ * Persisted to localStorage by the store. Cycle list + labels depend on
+ * `useGarden().units` (metric vs imperial).
  *
- * Position: first slot in the top-left chip column. Sibling chips
- * (StickyChip, MultiChip, UnitsChip) stack below this one.
+ * Position: first slot in the top-left chip column.
  */
 import {
   IMPERIAL_SNAP_VALUES,
@@ -22,33 +28,56 @@ import {
 } from '../store/garden'
 import { formatLength } from '../store/unitsHelpers'
 
-const STYLE: React.CSSProperties = {
+const SHELL_STYLE: React.CSSProperties = {
   position: 'fixed',
   top: 16,
   left: 16,
   zIndex: 11,
-  padding: '6px 10px',
+  display: 'inline-flex',
+  alignItems: 'stretch',
   background: 'rgba(20, 22, 24, 0.92)',
-  color: '#e5e5e5',
+  border: '1px solid #444',
+  borderRadius: 999,
   fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
   fontSize: 12,
-  borderRadius: 999,
-  border: '1px solid #444',
-  cursor: 'pointer',
+  color: '#e5e5e5',
+  overflow: 'hidden',
   userSelect: 'none',
 }
 
-const ACTIVE_STYLE: React.CSSProperties = {
-  ...STYLE,
+const VALUE_BTN: React.CSSProperties = {
+  padding: '6px 10px',
+  background: 'transparent',
+  color: 'inherit',
+  border: 'none',
+  fontSize: 12,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+}
+
+const VALUE_BTN_ACTIVE: React.CSSProperties = {
+  ...VALUE_BTN,
   background: 'rgba(60, 130, 200, 0.92)',
-  borderColor: '#4a90c8',
+  color: '#fff',
+}
+
+const MODE_BTN: React.CSSProperties = {
+  padding: '6px 10px',
+  background: 'rgba(255, 255, 255, 0.04)',
+  color: 'inherit',
+  borderLeft: '1px solid #444',
+  borderTop: 'none',
+  borderRight: 'none',
+  borderBottom: 'none',
+  fontSize: 11,
+  fontFamily: 'inherit',
+  fontWeight: 500,
+  cursor: 'pointer',
+  textTransform: 'lowercase',
+  minWidth: 50,
 }
 
 function nextSnap(v: SnapValue, list: SnapValue[]): SnapValue {
-  // The list always starts with `null` (off). Match by approximate equality
-  // to tolerate accumulated FP drift from the closest-neighbor migration on
-  // unit flips. If we can't find the current value (e.g. user just flipped
-  // and snap was reset), start at the first non-null entry.
   let i = list.findIndex((x) => snapEq(x, v))
   if (i < 0) i = 0
   return list[(i + 1) % list.length]
@@ -68,15 +97,30 @@ function snapLabel(v: SnapValue, units: 'metric' | 'imperial'): string {
 export default function SnapChip() {
   const snap = useGarden((s) => s.snap)
   const setSnap = useGarden((s) => s.setSnap)
+  const snapMode = useGarden((s) => s.snapMode)
+  const setSnapMode = useGarden((s) => s.setSnapMode)
   const units = useGarden((s) => s.units)
   const list = units === 'metric' ? METRIC_SNAP_VALUES : IMPERIAL_SNAP_VALUES
   return (
-    <button
-      style={snap === null ? STYLE : ACTIVE_STYLE}
-      onClick={() => setSnap(nextSnap(snap, list))}
-      title="Cycle snap distance"
-    >
-      {snapLabel(snap, units)}
-    </button>
+    <div style={SHELL_STYLE}>
+      <button
+        style={snap === null ? VALUE_BTN : VALUE_BTN_ACTIVE}
+        onClick={() => setSnap(nextSnap(snap, list))}
+        title="Cycle snap distance"
+      >
+        {snapLabel(snap, units)}
+      </button>
+      <button
+        style={MODE_BTN}
+        onClick={() => setSnapMode(snapMode === 'edge' ? 'center' : 'edge')}
+        title={
+          snapMode === 'edge'
+            ? "'edge' = snap to neighbor's edge with `snap` as the gap. Tap to switch to 'center' (grid)."
+            : "'center' = snap entity center to a fixed world grid. Tap to switch to 'edge' (magnet)."
+        }
+      >
+        {snapMode}
+      </button>
+    </div>
   )
 }
