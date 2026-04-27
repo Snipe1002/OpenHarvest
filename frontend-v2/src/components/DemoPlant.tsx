@@ -14,10 +14,17 @@
  * stem base (y = ground at the plant's location).
  */
 import * as THREE from 'three'
+import { useMemo } from 'react'
 import { Outlines } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
-import type { GardenEntity } from '../api/types'
+import type { GardenEntity, Quaternion } from '../api/types'
 import { useGarden } from '../store/garden'
+
+function quaternionToEuler(q: Quaternion): [number, number, number] {
+  const tq = new THREE.Quaternion(q.x, q.y, q.z, q.w)
+  const e = new THREE.Euler().setFromQuaternion(tq, 'XYZ')
+  return [e.x, e.y, e.z]
+}
 
 interface DemoPlantProps {
   entity: GardenEntity
@@ -51,13 +58,23 @@ export default function DemoPlant({ entity }: DemoPlantProps) {
   const leafSize = Math.min(0.4, Math.max(0.1, stemHeight * 0.5))
   const stemRadius = Math.max(0.015, Math.min(0.04, stemHeight * 0.05))
 
+  const groupRotation = useMemo(
+    () => quaternionToEuler(entity.transform.rotation),
+    [
+      entity.transform.rotation.x,
+      entity.transform.rotation.y,
+      entity.transform.rotation.z,
+      entity.transform.rotation.w,
+    ],
+  )
+
   const handleSelect = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation()
     selectEntity(entity.id)
   }
 
   return (
-    <group position={[px, py, pz]} onPointerDown={handleSelect}>
+    <group position={[px, py, pz]} rotation={groupRotation} onPointerDown={handleSelect}>
       {/* Stem */}
       <mesh position={[0, stemHeight / 2, 0]} castShadow>
         <cylinderGeometry args={[stemRadius, stemRadius, stemHeight, 8]} />

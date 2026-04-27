@@ -1,22 +1,19 @@
 /**
  * DemoGround — large flat grass plane. Receives shadows.
  *
- * Owns two pointer responsibilities for milestone #3's editing loop:
- *   1. Clearing the active selection when the user clicks empty ground
- *      (and no placement is active).
- *   2. Spawning a new entity at the click point when placement mode is on.
+ * Pointer responsibilities for the editing loop:
+ *   - In placement mode: clicking the ground spawns a new entity at the
+ *     hit point.
+ *   - Out of placement mode: a click on empty space (no entity hit) clears
+ *     the active selection. We use R3F's `onPointerMissed` callback wired
+ *     up at the App level for that, but the ground also handles its own
+ *     `onClick` to support placement.
  *
- * Camera-control coexistence: drei's `<CameraControls>` shares pointer events
- * with R3F. To stop a small camera nudge from registering as a place/click,
- * we record the pointer-down screen position and only treat the gesture as a
- * "click" if the pointer-up lands within DRAG_THRESHOLD_PX. Any larger
- * displacement is treated as a camera drag and ignored here.
- *
- * We use `onPointerUp` (not `onPointerDown`) on purpose: the camera control
- * needs the down event to start its drag, and we only want to act when the
- * gesture actually was a click rather than a drag.
+ * R3F's built-in `onClick` semantic already handles drag-vs-click: it only
+ * fires when pointer-up lands on the same target as pointer-down without a
+ * significant move, so a camera-orbit drag won't trip it. That's why we no
+ * longer track pointerdown/pointerup coords manually.
  */
-import { useRef } from 'react'
 import type { ThreeEvent } from '@react-three/fiber'
 import { ApiError, createEntity } from '../api/client'
 import type {
@@ -27,11 +24,6 @@ import type {
 } from '../api/types'
 import type { PlacementType } from '../store/garden'
 import { useGarden } from '../store/garden'
-
-/** Maximum screen-space movement (px) between pointer-down and pointer-up
- *  for the gesture to count as a "click" rather than a camera drag. 6px gives
- *  trackpad / touchscreen users some slop without misclassifying real clicks. */
-const DRAG_THRESHOLD_PX = 6
 
 const IDENTITY_TRANSFORM: Transform = {
   position: { x: 0, y: 0, z: 0 },
@@ -93,30 +85,12 @@ function buildCreateRequest(
 }
 
 export default function DemoGround() {
-  const downRef = useRef<{ x: number; y: number } | null>(null)
-
-  const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
-    // Track raw screen coords so we can classify the gesture on pointer-up.
-    downRef.current = { x: e.clientX, y: e.clientY }
-  }
-
-  const handlePointerUp = async (e: ThreeEvent<PointerEvent>) => {
-    const down = downRef.current
-    downRef.current = null
-    if (!down) return
-
-    const dx = e.clientX - down.x
-    const dy = e.clientY - down.y
-    const distSq = dx * dx + dy * dy
-    if (distSq > DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) {
-      // Camera drag — ignore.
-      return
-    }
-
+  const handleClick = async (e: ThreeEvent<MouseEvent>) => {
     const { selectedEntityId, placement, currentGardenId } = useGarden.getState()
 
     if (placement) {
-      // Place a new entity at the hit point.
+      // Stop propagation so the camera control / pointer-missed don't react.
+      e.stopPropagation()
       if (!currentGardenId) {
         useGarden.getState().setToast('No active garden — cannot place')
         useGarden.getState().setPlacement(null)
@@ -140,7 +114,6 @@ export default function DemoGround() {
         useGarden.getState().setToast(msg)
         console.error('[DemoGround] createEntity failed', err)
       } finally {
-        // Exit placement mode whether success or failure.
         useGarden.getState().setPlacement(null)
       }
       return
@@ -157,12 +130,10 @@ export default function DemoGround() {
       rotation={[-Math.PI / 2, 0, 0]}
       position={[0, 0, 0]}
       receiveShadow
-      onPointerDown={handlePointerDown}
-      onPointerUp={handlePointerUp}
+      onClick={handleClick}
     >
       <planeGeometry args={[100, 100]} />
       <meshStandardMaterial color="#4a6b3a" roughness={0.9} metalness={0} />
     </mesh>
   )
 }
-
