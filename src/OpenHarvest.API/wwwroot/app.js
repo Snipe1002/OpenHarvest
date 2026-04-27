@@ -248,6 +248,7 @@
     BedFirstCorner: "bed-1",
     BedSecondCorner: "bed-2",
     PlantPick: "plant-pick",
+    Move: "move",
   };
   let mode = Mode.Idle;
   let bedFirst = null;
@@ -303,6 +304,10 @@
   let pressOrigin = { x: 0, y: 0 };
 
   scene.onPointerObservable.add((info) => {
+    // While in Move mode, the dedicated drag-and-drop observer (registered inside
+    // startMove) owns pointer events. Skip the long-press / placement plumbing here so we
+    // don't re-arm the radial menu mid-drag or fire an entity-pick on commit.
+    if (mode === Mode.Move) return;
     const ev = info.event;
     if (info.type === BABYLON.PointerEventTypes.POINTERDOWN) {
       pressMoved = false;
@@ -511,6 +516,14 @@
     radialEntityId = eid;
     radial.style.left = x + "px";
     radial.style.top = y + "px";
+    // Resize is only meaningful for box-geometry entities (Beds). Disable it for Plants.
+    const rec = meshRegistry.get(eid);
+    const resizeItem = radial.querySelector('.item[data-action="resize"]');
+    if (resizeItem) {
+      const canResize = !!rec && rec.entity?.kind === "Bed";
+      resizeItem.classList.toggle("disabled", !canResize);
+      resizeItem.title = canResize ? "Resize this bed" : "Resize is only available for beds";
+    }
     radial.classList.add("open");
   }
   function closeRadial() {
@@ -520,12 +533,14 @@
   radial.addEventListener("click", async (ev) => {
     const item = ev.target.closest(".item");
     if (!item || !radialEntityId) return;
+    if (item.classList.contains("disabled")) return;
     const action = item.dataset.action;
     const eid = radialEntityId;
     closeRadial();
     if (action === "delete") deleteEntityById(eid);
     else if (action === "rename") openRenameModal(eid);
     else if (action === "move") startMove(eid);
+    else if (action === "resize") openResizeModal(eid);
     else if (action === "photo") openPhotosModal(eid);
   });
   document.addEventListener("pointerdown", (ev) => {
@@ -740,42 +755,191 @@
     } catch { /* ignore */ }
   }
 
-  // Move: detach camera control, drag entity along the ground until pointer up.
+  // Move: detach camera control, then arm a drag-and-drop state machine on the canvas.
+  //
+  // The previous implementation was racy: it registered a window-level pointerup the moment
+  // the radial item was tapped, so the very next pointerup (often a stray click on the canvas
+  // or the synthesized tap from closing the radial on a touchscreen) committed the move
+  // before the user had a chance to drag. Mesh tracking ran on every POINTERMOVE — fine on
+  // desktop, but on touch the pointer position is stale until the user actually presses, so
+  // the bed appeared "stuck" while the move silently ended.
+  //
+  // The new flow:
+  //   1. setMode → Mode.Move; status nag tells the user what to do.
+  //   2. Wait for a fresh POINTERDOWN on the canvas — that arms the drag.
+  //   3. Track POINTERMOVE only between pointerdown and pointerup (proper drag semantics
+  //      on both mouse and touch).
+  //   4. POINTERUP commits + PATCHes the new transform, then restores camera control.
+  //   5. Pressing Escape or tapping outside cancels and snaps the bed back.
   function startMove(eid) {
     const rec = meshRegistry.get(eid);
     if (!rec) return;
-    setStatus("drag to move; release to drop");
+    setStatus("tap-and-drag the bed to its new spot — release to drop");
+    canvas.style.cursor = "grab";
     camera.detachControl();
+    mode = Mode.Move;
 
-    const move = () => {
-      const p = pickGround();
-      if (p) {
-        rec.mesh.position.x = p.x;
-        rec.mesh.position.z = p.z;
-      }
+    const origin = {
+      x: rec.mesh.position.x,
+      y: rec.mesh.position.y,
+      z: rec.mesh.position.z,
     };
-    const onMove = () => move();
-    const onUp = async () => {
+    let dragging = false;
+    let committed = false;
+
+    const followPointer = () => {
+      const p = pickGround();
+      if (!p) return;
+      rec.mesh.position.x = p.x;
+      rec.mesh.position.z = p.z;
+    };
+
+    const cleanup = () => {
       scene.onPointerObservable.remove(moveObs);
-      window.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("keydown", onKey, true);
       camera.attachControl(canvas, true);
+      canvas.style.cursor = "";
+      mode = Mode.Idle;
+    };
+
+    const cancel = () => {
+      if (committed) return;
+      committed = true;
+      rec.mesh.position.x = origin.x;
+      rec.mesh.position.z = origin.z;
+      cleanup();
+      setStatus("move cancelled");
+    };
+
+    const commit = async () => {
+      if (committed) return;
+      committed = true;
+      cleanup();
       const newPos = { x: rec.mesh.position.x, y: 0, z: rec.mesh.position.z };
+      // No-op guard: if the user tapped without actually dragging, skip the PATCH.
+      const dx = newPos.x - origin.x;
+      const dz = newPos.z - origin.z;
+      if (dx * dx + dz * dz < 0.0001) {
+        setStatus("move cancelled (no drag)");
+        return;
+      }
       try {
         const updated = await Api.updateEntity(gardenId, eid, {
           transform: {
             position: newPos,
             rotation: { x: 0, y: 0, z: 0, w: 1 },
-            scale: rec.entity.transform?.scale || { x: 1, y: 1, z: 1 }
-          }
+            scale: rec.entity.transform?.scale || { x: 1, y: 1, z: 1 },
+          },
         });
         rec.entity = updated;
-        setStatus("moved");
-      } catch (e) { console.error(e); setStatus("move failed"); }
+        setStatus(`moved to (${newPos.x.toFixed(1)}, ${newPos.z.toFixed(1)})`);
+      } catch (e) {
+        console.error(e);
+        // Snap back on server failure so client state matches truth.
+        rec.mesh.position.x = origin.x;
+        rec.mesh.position.z = origin.z;
+        setStatus("move failed — reverted");
+      }
     };
+
     const moveObs = scene.onPointerObservable.add((info) => {
-      if (info.type === BABYLON.PointerEventTypes.POINTERMOVE) onMove();
+      if (committed) return;
+      if (info.type === BABYLON.PointerEventTypes.POINTERDOWN) {
+        // Only arm on left-button (or touch). Any pointerdown counts on touch (button 0).
+        dragging = true;
+        canvas.style.cursor = "grabbing";
+        followPointer();
+      } else if (info.type === BABYLON.PointerEventTypes.POINTERMOVE) {
+        if (dragging) followPointer();
+      } else if (info.type === BABYLON.PointerEventTypes.POINTERUP) {
+        // Only commit if the user actually pressed down inside this move session. This
+        // prevents the trailing pointerup from the radial-menu tap from prematurely ending
+        // the move before the user's first drag.
+        if (!dragging) return;
+        dragging = false;
+        commit();
+      }
     });
-    window.addEventListener("pointerup", onUp, true);
+
+    const onKey = (ev) => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        cancel();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+  }
+
+  // ---------- resize bed modal ----------
+  // Beds store their footprint in geometry.size (x = width, z = depth, y = thickness).
+  // We expose width and depth as feet-style inputs (the canonical engine unit is 1 unit ≈
+  // 1 foot). Server accepts the full Geometry on PATCH, so we send a fresh Box with the
+  // existing thickness preserved.
+  async function openResizeModal(eid) {
+    const rec = meshRegistry.get(eid);
+    if (!rec || rec.entity.kind !== "Bed") return;
+    const size = rec.entity.geometry?.size || { x: 4, y: 0.4, z: 4 };
+    closeModal();
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.innerHTML = `
+      <h2>Resize bed</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim);">
+          Width (ft)
+          <input type="number" data-field="w" min="1" max="30" step="0.5" />
+        </label>
+        <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim);">
+          Depth (ft)
+          <input type="number" data-field="d" min="1" max="30" step="0.5" />
+        </label>
+      </div>
+      <div class="ai-meta" style="margin-top:8px;">Allowed range: 1.0 – 30.0 ft per side.</div>
+      <div class="modal-actions">
+        <button data-act="cancel">Cancel</button>
+        <button class="primary" data-act="save">Save</button>
+      </div>
+    `;
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    activeModal = backdrop;
+
+    const wInput = modal.querySelector('input[data-field="w"]');
+    const dInput = modal.querySelector('input[data-field="d"]');
+    wInput.value = (Number(size.x) || 4).toFixed(1);
+    dInput.value = (Number(size.z) || 4).toFixed(1);
+
+    const save = async () => {
+      const w = parseFloat(wInput.value);
+      const d = parseFloat(dInput.value);
+      if (!isFinite(w) || !isFinite(d) || w < 1 || w > 30 || d < 1 || d > 30) {
+        setStatus("size must be between 1 and 30 ft per side");
+        return;
+      }
+      closeModal();
+      try {
+        const updated = await Api.updateEntity(gardenId, eid, {
+          geometry: {
+            kind: "Box",
+            size: { x: w, y: Number(size.y) || 0.4, z: d },
+          },
+        });
+        // Geometry changed — easiest path is to dispose + recreate the mesh from the server
+        // payload. SignalR will broadcast the same upsert; applyEntityUpsert is idempotent.
+        disposeEntity(eid);
+        meshForEntity(updated);
+        setStatus(`resized to ${w.toFixed(1)}×${d.toFixed(1)}`);
+      } catch (e) { console.error(e); setStatus("resize failed"); }
+    };
+
+    wInput.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { save(); ev.preventDefault(); } else if (ev.key === "Escape") closeModal(); });
+    dInput.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { save(); ev.preventDefault(); } else if (ev.key === "Escape") closeModal(); });
+    backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) closeModal(); });
+    modal.querySelector('[data-act="cancel"]').addEventListener("click", () => closeModal());
+    modal.querySelector('[data-act="save"]').addEventListener("click", () => save());
+    setTimeout(() => { wInput.focus(); wInput.select(); }, 50);
   }
 
   // ---------- live sync (SignalR) ----------
