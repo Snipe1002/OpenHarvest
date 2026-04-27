@@ -2,11 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>OpenHarvest v2</title>
     <style>
       html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
       body { background: #1a1a1a; color: #ddd; font-family: system-ui, sans-serif; }
+      /* Touch handling: take over ALL gestures on the canvas so iOS Safari
+         and Android Chrome don't intercept horizontal swipes for back/forward
+         navigation. `touch-action: none` tells the browser "I'll handle every
+         pointer gesture myself" — drei's CameraControls then receives every
+         event cleanly. `overscroll-behavior: none` on html/body prevents the
+         pull-to-refresh / rubber-band at the edges. */
+      html, body { overscroll-behavior: none; overscroll-behavior-x: none; }
+      canvas { touch-action: none; }
     </style>
   </head>
   <body>
