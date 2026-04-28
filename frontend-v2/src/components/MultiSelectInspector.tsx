@@ -1,8 +1,23 @@
 /**
  * MultiSelectInspector — bottom-center HTML overlay shown when the user has
- * 2+ entities selected. Mirrors the InspectorCard's utilitarian dark-pill
- * visual language but exposes mass operations across the whole selection
- * instead of single-entity edits.
+ * 2+ ENTITIES PRIMARILY selected. Mirrors the InspectorCard's utilitarian
+ * dark-pill visual language but exposes mass operations across the whole
+ * selection instead of single-entity edits.
+ *
+ * Selection model (m#7c): macro ops operate on `primarySelectedIds` — the
+ * explicit picks — NOT on the expanded effective selection. Three's scene
+ * graph already cascades parent transforms onto children, so moving the
+ * primary picks is enough; including descendants would double-move them.
+ * The header reports the primary count and notes how many descendants
+ * came along via "extend" mode.
+ *
+ * Level-awareness: every primary's `parentId` is examined. If they all
+ * share a parentId (or all are top-level), level-sensitive ops (Distribute,
+ * Normalize, Align, Rotate) operate within that local frame. If primaries
+ * span multiple hierarchy levels — e.g. one bed plus a plant from a DIFFERENT
+ * bed — those ops are disabled with a tooltip explaining why. Delete-all
+ * and Duplicate-all stay enabled because they don't depend on a shared
+ * coordinate frame.
  *
  * Position rationale: bottom-center, sitting just above MainToolbar (which
  * is at bottom:16). The single InspectorCard floats anchored to its entity
@@ -11,21 +26,26 @@
  * edit-mode controls already.
  *
  * Operations:
- *   - 🗑 Delete all   — two-step confirm; DELETE every selected entity in
+ *   - 🗑 Delete all   — two-step confirm; DELETE every primary entity in
  *                       parallel; revert all on any failure.
- *   - 📋 Duplicate all — POST a copy of each (offset +0.5m on X), then jump
- *                       the selection to the new copies.
- *   - ⟳ Rotate 90°    — rotate every entity around the GROUP CENTROID on
- *                       world Y. Each entity's local position relative to
- *                       the centroid is rotated 90° on Y; its own quaternion
- *                       is also multiplied by Y90 so its facing matches.
+ *   - 📋 Duplicate all — POST a copy of each primary (offset +0.5m on X),
+ *                       then jump the selection to the new copies.
+ *   - ⟳ Rotate 90°    — rotate every primary around the GROUP CENTROID on
+ *                       world Y. (Disabled on mixed levels.)
  *   - ⇄ Translate     — flip groupTranslateActive on; the user then pointer-
  *                       downs any selected entity and drags the whole group.
- *   - ↔ Distribute X  — needs >=3; sort selection by X, keep extremes,
+ *   - ↔ Normalize     — distribute primaries evenly along the longest
+ *                       extent axis (X or Z) at equal spacing between
+ *                       extremes. Picks the axis automatically. Y is left
+ *                       alone. Disabled on mixed levels.
+ *   - ↔ Distribute X  — needs >=3; sort primaries by X, keep extremes,
  *                       redistribute middle entities at equal spacing.
- *   - ↕ Distribute Z  — same on Z.
- *   - ⇤/⇥ Align L/R   — set every selected entity's X to min/max X.
- *   - ⇩/⇧ Align T/B(Z) — set every selected entity's Z to min/max Z.
+ *                       (Disabled on mixed levels.)
+ *   - ↕ Distribute Z  — same on Z. (Disabled on mixed levels.)
+ *   - ⇤/⇥ Align L/R   — set every primary's X to min/max X. (Disabled on
+ *                       mixed levels.)
+ *   - ⇩/⇧ Align T/B(Z) — set every primary's Z to min/max Z. (Disabled on
+ *                       mixed levels.)
  *   - ✕ Close         — clearSelection().
  *
  * Optimism + revert: every op snapshots the affected entities at start,
@@ -226,10 +246,16 @@ interface MassOpResult {
 }
 
 export default function MultiSelectInspector() {
-  // We snapshot the array of selected ids in selection order. Each entity is
-  // looked up from the entities dict so a streaming SignalR upsert doesn't
-  // tear the inspector. Using an array + dict keeps re-renders predictable.
-  const selectedIds = useGarden((s) => s.selectedEntityIds)
+  // m#7c: macro ops scope to PRIMARY picks only. Three's scene graph already
+  // cascades parent transforms onto descendants, so moving primaries is
+  // enough — including descendants would double-move them. We still read
+  // the effective selection length to know when to render at all (the
+  // multi-inspector should be silent if the user only has one primary even
+  // if descendants make the effective list >=2 — InspectorCard handles that).
+  const selectedIds = useGarden((s) => s.primarySelectedIds)
+  // Effective selection — used for the centroid + descendant count surface
+  // in the header so the user can see "this op covers 12 entities total".
+  const effectiveIds = useGarden((s) => s.selectedEntityIds)
   const entitiesDict = useGarden((s) => s.entities)
   const gardenId = useGarden((s) => s.currentGardenId)
   const setToast = useGarden((s) => s.setToast)
@@ -249,6 +275,34 @@ export default function MultiSelectInspector() {
     }
     return out
   }, [selectedIds, entitiesDict])
+
+  // Hierarchy level analysis. `commonParentId` is:
+  //   - null  : every primary is top-level (no parentId)
+  //   - <id>  : every primary shares the same parentId (and is non-null)
+  //   - 'mixed': primaries span different parentIds — level-sensitive ops
+  //     can't run because we'd be mixing local frames.
+  // `levelLabel` is rendered in the header for context.
+  const { commonParentId, levelLabel } = useMemo(() => {
+    if (selected.length === 0) {
+      return { commonParentId: 'mixed' as const, levelLabel: '' }
+    }
+    const first = selected[0].parentId ?? null
+    let allSame = true
+    for (const e of selected) {
+      const pid = e.parentId ?? null
+      if (pid !== first) {
+        allSame = false
+        break
+      }
+    }
+    if (!allSame) return { commonParentId: 'mixed' as const, levelLabel: 'mixed levels' }
+    if (first === null) return { commonParentId: null, levelLabel: 'top-level' }
+    const parent = entitiesDict[first]
+    const parentName = parent?.name ?? parent?.geometry.prefabRef ?? parent?.kind ?? 'parent'
+    return { commonParentId: first, levelLabel: `children of ${parentName}` }
+  }, [selected, entitiesDict])
+
+  const isMixedLevel = commonParentId === 'mixed'
 
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -486,9 +540,53 @@ export default function MultiSelectInspector() {
     await applyOptimisticPatch(next)
   }
 
-  const canDistribute = selected.length >= 3
-  const buttonDisabled = busy
+  /**
+   * Normalize — distribute primaries evenly along whichever in-plane axis
+   * (X or Z) is the longest extent of the current selection. The user
+   * doesn't have to think about which axis applies; we look at
+   * |maxX - minX| vs |maxZ - minZ| and pick the bigger one. Y is left
+   * untouched. Ties go to X (arbitrary but stable).
+   *
+   * With <3 selected the op is a no-op (nothing to redistribute), matching
+   * Distribute X / Z. Caller should disable the button at <3 too.
+   */
+  const onNormalize = async () => {
+    if (selected.length < 3) return
+    let minX = Infinity
+    let maxX = -Infinity
+    let minZ = Infinity
+    let maxZ = -Infinity
+    for (const e of selected) {
+      const { x, z } = e.transform.position
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (z < minZ) minZ = z
+      if (z > maxZ) maxZ = z
+    }
+    const xExtent = maxX - minX
+    const zExtent = maxZ - minZ
+    // If both extents are effectively zero the points overlap — give up.
+    if (xExtent < 1e-6 && zExtent < 1e-6) return
+    const axis: 'x' | 'z' = xExtent >= zExtent ? 'x' : 'z'
+    await onDistribute(axis)
+  }
 
+  const canDistribute = selected.length >= 3
+  // Level-sensitive ops (Distribute, Normalize, Align, Rotate) require all
+  // primaries share a coordinate frame. When the selection spans multiple
+  // levels — e.g. a top-level bed AND a plant inside a different bed — the
+  // local frames don't line up, so disable the op rather than producing a
+  // visually nonsensical result. Delete + Duplicate stay enabled because
+  // they don't depend on a shared frame.
+  const levelLockedDisabled = isMixedLevel
+  const buttonDisabled = busy
+  const distributeTooltipSuffix = canDistribute
+    ? ''
+    : ' — needs 3+ primaries'
+  const mixedTooltip =
+    'Selection spans hierarchy levels — pick items at one level to use this.'
+
+  const descendantCount = effectiveIds.length - selectedIds.length
   const breakdown = describeKindBreakdown(selected)
   const wrapStyle: React.CSSProperties = { ...WRAP_STYLE_BASE, bottom: toolbarBottom }
 
@@ -496,7 +594,13 @@ export default function MultiSelectInspector() {
     <div style={wrapStyle} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
       <div style={HEADER_STYLE}>
         <span style={{ color: '#4ec9ff', fontWeight: 600 }}>{selected.length} selected</span>
+        {levelLabel && (
+          <span style={{ color: isMixedLevel ? '#ffaa00' : '#aaa' }}>— {levelLabel}</span>
+        )}
         <span style={{ color: '#aaa' }}>— {breakdown}</span>
+        {descendantCount > 0 && (
+          <span style={{ color: '#888' }}>(+{descendantCount} descendants)</span>
+        )}
         <span style={{ color: '#888' }}>
           centroid ({fmt(centroid.x, units)}, {fmt(centroid.y, units)}, {fmt(centroid.z, units)})
         </span>
@@ -504,10 +608,14 @@ export default function MultiSelectInspector() {
 
       <div style={PILL_STYLE}>
         <button
-          style={buttonDisabled ? DISABLED_BUTTON : ICON_BUTTON}
+          style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
           onClick={onRotate}
-          disabled={buttonDisabled}
-          title="Rotate group 90° around centroid (world Y)"
+          disabled={buttonDisabled || levelLockedDisabled}
+          title={
+            levelLockedDisabled
+              ? mixedTooltip
+              : 'Rotate group 90° around centroid (world Y)'
+          }
         >
           ⟳
         </button>
@@ -533,57 +641,99 @@ export default function MultiSelectInspector() {
           style={buttonDisabled ? DISABLED_BUTTON : ICON_BUTTON}
           onClick={onDuplicateAll}
           disabled={buttonDisabled}
-          title="Duplicate all (offset +0.5m on X)"
+          title="Duplicate all (offset +0.5m on X) — works on any selection"
         >
           📋
         </button>
         <span style={{ width: 1, alignSelf: 'stretch', background: '#444', margin: '0 2px' }} />
         <button
-          style={buttonDisabled || !canDistribute ? DISABLED_BUTTON : ICON_BUTTON}
+          style={
+            buttonDisabled || !canDistribute || levelLockedDisabled
+              ? DISABLED_BUTTON
+              : ICON_BUTTON
+          }
+          onClick={onNormalize}
+          disabled={buttonDisabled || !canDistribute || levelLockedDisabled}
+          title={
+            levelLockedDisabled
+              ? mixedTooltip
+              : canDistribute
+                ? 'Normalize — distribute evenly along the longest axis'
+                : `Normalize${distributeTooltipSuffix}`
+          }
+        >
+          ⇔
+        </button>
+        <button
+          style={
+            buttonDisabled || !canDistribute || levelLockedDisabled
+              ? DISABLED_BUTTON
+              : ICON_BUTTON
+          }
           onClick={() => onDistribute('x')}
-          disabled={buttonDisabled || !canDistribute}
-          title={canDistribute ? 'Distribute along X (equal spacing, extremes fixed)' : 'Distribute X — needs 3+ selected'}
+          disabled={buttonDisabled || !canDistribute || levelLockedDisabled}
+          title={
+            levelLockedDisabled
+              ? mixedTooltip
+              : canDistribute
+                ? 'Distribute along X (equal spacing, extremes fixed)'
+                : `Distribute X${distributeTooltipSuffix}`
+          }
         >
           ↔
         </button>
         <button
-          style={buttonDisabled || !canDistribute ? DISABLED_BUTTON : ICON_BUTTON}
+          style={
+            buttonDisabled || !canDistribute || levelLockedDisabled
+              ? DISABLED_BUTTON
+              : ICON_BUTTON
+          }
           onClick={() => onDistribute('z')}
-          disabled={buttonDisabled || !canDistribute}
-          title={canDistribute ? 'Distribute along Z (equal spacing, extremes fixed)' : 'Distribute Z — needs 3+ selected'}
+          disabled={buttonDisabled || !canDistribute || levelLockedDisabled}
+          title={
+            levelLockedDisabled
+              ? mixedTooltip
+              : canDistribute
+                ? 'Distribute along Z (equal spacing, extremes fixed)'
+                : `Distribute Z${distributeTooltipSuffix}`
+          }
         >
           ↕
         </button>
         <span style={{ width: 1, alignSelf: 'stretch', background: '#444', margin: '0 2px' }} />
         <button
-          style={buttonDisabled ? DISABLED_BUTTON : ICON_BUTTON}
+          style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
           onClick={() => onAlignX('min')}
-          disabled={buttonDisabled}
-          title="Align Left (min X)"
+          disabled={buttonDisabled || levelLockedDisabled}
+          title={levelLockedDisabled ? mixedTooltip : 'Align Left (min X)'}
         >
           ⇤
         </button>
         <button
-          style={buttonDisabled ? DISABLED_BUTTON : ICON_BUTTON}
+          style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
           onClick={() => onAlignX('max')}
-          disabled={buttonDisabled}
-          title="Align Right (max X)"
+          disabled={buttonDisabled || levelLockedDisabled}
+          title={levelLockedDisabled ? mixedTooltip : 'Align Right (max X)'}
         >
           ⇥
         </button>
         <button
-          style={buttonDisabled ? DISABLED_BUTTON : ICON_BUTTON}
+          style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
           onClick={() => onAlignZ('min')}
-          disabled={buttonDisabled}
-          title="Align Top — minimum Z (toward camera-back in default view)"
+          disabled={buttonDisabled || levelLockedDisabled}
+          title={
+            levelLockedDisabled
+              ? mixedTooltip
+              : 'Align Top — minimum Z (toward camera-back in default view)'
+          }
         >
           ⇩
         </button>
         <button
-          style={buttonDisabled ? DISABLED_BUTTON : ICON_BUTTON}
+          style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
           onClick={() => onAlignZ('max')}
-          disabled={buttonDisabled}
-          title="Align Bottom — maximum Z"
+          disabled={buttonDisabled || levelLockedDisabled}
+          title={levelLockedDisabled ? mixedTooltip : 'Align Bottom — maximum Z'}
         >
           ⇧
         </button>
@@ -593,7 +743,7 @@ export default function MultiSelectInspector() {
           onClick={onDeleteAll}
           onBlur={() => setConfirmingDelete(false)}
           disabled={buttonDisabled}
-          title={confirmingDelete ? 'Confirm delete?' : 'Delete all selected'}
+          title={confirmingDelete ? 'Confirm delete?' : 'Delete all selected primaries'}
         >
           🗑
         </button>

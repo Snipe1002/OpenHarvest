@@ -252,6 +252,11 @@ export function useGroupTranslateDrag(entity: GardenEntity): TranslateDragHandle
 
   const isActive = (): boolean => {
     const { groupTranslateActive, selectedEntityIds } = useGarden.getState()
+    // We hit-test against the EFFECTIVE selection so the user can
+    // pointer-down on a descendant (e.g. a plant inside one of the selected
+    // beds) to start the drag. The group of entities actually moved is
+    // restricted to primaries below — Three's scene graph handles
+    // descendant cascade automatically.
     return groupTranslateActive && selectedEntityIds.includes(entity.id)
   }
 
@@ -267,6 +272,8 @@ export function useGroupTranslateDrag(entity: GardenEntity): TranslateDragHandle
       const half = entityHalfExtents(entity)
       const hw = half?.hw ?? 0
       const hd = half?.hd ?? 0
+      // Excluding the EFFECTIVE selection from neighbor magnetism — primaries
+      // PLUS descendants — keeps the group from snapping to its own children.
       const neighbors = collectNeighborAABBs(new Set(selectedEntityIds))
       const [sx, sz] = snapXZWithMagnet(x, z, hw, hd, snap, neighbors)
       return { x: sx, z: sz }
@@ -288,9 +295,14 @@ export function useGroupTranslateDrag(entity: GardenEntity): TranslateDragHandle
       /* no-op */
     }
 
-    const { entities, selectedEntityIds } = useGarden.getState()
+    // We move only the PRIMARY picks (m#7c). Three's scene graph cascades
+    // every primary's transform onto its descendants for free, so including
+    // descendants here would double-move them. Snapshotting primaries also
+    // guarantees we don't try to apply a world-frame delta to a child whose
+    // transform.position is parent-local.
+    const { entities, primarySelectedIds } = useGarden.getState()
     const originals: Record<string, GardenEntity> = {}
-    for (const id of selectedEntityIds) {
+    for (const id of primarySelectedIds) {
       const ent = entities[id]
       if (ent) originals[id] = ent
     }

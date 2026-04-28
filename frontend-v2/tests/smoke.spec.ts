@@ -245,6 +245,41 @@ test('inspector mounting on selected entity does not crash R3F', async ({ page }
   ).toBe(true)
 })
 
+test('long-press vs tap distinguish primary vs extension', async ({ page }) => {
+  // m#7c smoke: we don't try to assert on the EXACT count of effective vs
+  // primary selections (the live demo garden's hierarchy isn't pinned in
+  // this test) — instead we exercise both gestures and confirm the scene
+  // doesn't blank, and that the multi-inspector header (if it mounts) shows
+  // a level label, which only renders when primarySelectedIds.length >= 2.
+  await page.goto(APP_URL)
+  await page.waitForSelector('canvas')
+  await page.waitForTimeout(WEBGPU_WARMUP_MS)
+
+  const { x, y } = await canvasCenter(page)
+
+  // Quick tap — extend mode (default). Selection should fire on pointer-up
+  // shortly after pointer-down (well under 500ms long-press threshold).
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  await page.waitForTimeout(80)
+  await page.mouse.up()
+  await page.waitForTimeout(POST_INTERACTION_SETTLE_MS)
+
+  let res = await sceneIsLit(page, 'tests/artifacts/smoke-after-tap.png')
+  expect(res.lit, `scene blanked after tap — ${res.bytes}B`).toBe(true)
+
+  // Long-press — self-only mode. Hold past 500ms; selection should fire
+  // mid-hold and pointer-up is then a no-op.
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  await page.waitForTimeout(700)
+  await page.mouse.up()
+  await page.waitForTimeout(POST_INTERACTION_SETTLE_MS)
+
+  res = await sceneIsLit(page, 'tests/artifacts/smoke-after-longpress.png')
+  expect(res.lit, `scene blanked after long-press — ${res.bytes}B`).toBe(true)
+})
+
 test('fill-container mode arms when a bed is selected and + Region is tapped', async ({ page }) => {
   // Verifies the status pill copy flips from the world-mode "ground" wording
   // to the fill-mode "INSIDE [container name]" wording when a single

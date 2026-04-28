@@ -331,12 +331,15 @@ export default function MainToolbar() {
     setPlacement(null)
     setHousePlacement(null)
     // Selection-driven scope decision: if EXACTLY ONE container-ish entity is
-    // selected, drag fills it with plants. Otherwise, drag paints a top-level
-    // region of beds (m#10a behavior).
-    const { selectedEntityIds, entities, prefabCatalog } = useGarden.getState()
+    // PRIMARILY selected (one explicit pick), drag fills it with plants.
+    // Keying off `primarySelectedIds` instead of `selectedEntityIds` keeps
+    // fill-mode armed when the user normal-tapped a parent — even though
+    // descendants are auto-included in the effective selection, the primary
+    // count is still 1. (m#10b contract preserved across m#7c.)
+    const { primarySelectedIds, entities, prefabCatalog } = useGarden.getState()
     let scope: RegionScope = { kind: 'world' }
-    if (selectedEntityIds.length === 1) {
-      const parent = entities[selectedEntityIds[0]]
+    if (primarySelectedIds.length === 1) {
+      const parent = entities[primarySelectedIds[0]]
       if (parent) {
         const target = resolveFillTarget(parent, prefabCatalog)
         if (target) {

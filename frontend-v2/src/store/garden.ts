@@ -193,6 +193,72 @@ function writePersistedMultiMode(v: boolean): void {
 }
 
 /**
+ * Walk the entities map and return every transitive descendant of `rootId`
+ * (children, grandchildren, ...). Excludes the root itself. Visited set
+ * guards against pathological cycles (shouldn't happen on a clean server but
+ * cheap insurance, especially during streaming SignalR upserts where the
+ * graph can be momentarily inconsistent).
+ */
+function collectDescendants(
+  rootId: Guid,
+  entities: Record<Guid, GardenEntity>,
+): Guid[] {
+  // Build a parentId -> children index once. Cheap (O(n)) and avoids an
+  // O(n) scan per BFS step.
+  const childrenByParent = new Map<Guid, Guid[]>()
+  for (const id in entities) {
+    const e = entities[id]
+    const pid = e.parentId
+    if (!pid) continue
+    const list = childrenByParent.get(pid)
+    if (list) list.push(id)
+    else childrenByParent.set(pid, [id])
+  }
+  const out: Guid[] = []
+  const seen = new Set<Guid>([rootId])
+  const queue: Guid[] = [rootId]
+  while (queue.length > 0) {
+    const cur = queue.shift()!
+    const kids = childrenByParent.get(cur)
+    if (!kids) continue
+    for (const k of kids) {
+      if (seen.has(k)) continue
+      seen.add(k)
+      out.push(k)
+      queue.push(k)
+    }
+  }
+  return out
+}
+
+/**
+ * Expand a list of primary ids to the effective selection by including
+ * descendants when `mode === 'extend'`. De-dups while preserving primary
+ * ordering (primaries first, descendants in BFS order after each).
+ */
+function expandSelection(
+  primaries: Guid[],
+  entities: Record<Guid, GardenEntity>,
+  mode: 'extend' | 'self-only',
+): Guid[] {
+  if (primaries.length === 0) return []
+  if (mode === 'self-only') return [...primaries]
+  const seen = new Set<Guid>()
+  const out: Guid[] = []
+  for (const pid of primaries) {
+    if (seen.has(pid)) continue
+    seen.add(pid)
+    out.push(pid)
+    for (const d of collectDescendants(pid, entities)) {
+      if (seen.has(d)) continue
+      seen.add(d)
+      out.push(d)
+    }
+  }
+  return out
+}
+
+/**
  * Active "place new entity" mode. `null` when not placing. Toolbar buttons
  * set this; the ground click handler reads it to decide what to POST.
  */
@@ -301,11 +367,31 @@ export interface GardenState {
   error: string | null
 
   /**
-   * Currently selected entity ids, in selection order. Drives the inspector
-   * (single-selection InspectorCard for length===1, MultiSelectInspector for
-   * length>=2) and outline overlays. Empty array = nothing selected.
+   * Currently selected entity ids — the EFFECTIVE selection. In default
+   * "extend" selection mode this includes both the explicit picks
+   * (`primarySelectedIds`) AND every transitive descendant of those picks
+   * (m#7 hierarchy). In "self-only" mode (long-press) this equals
+   * `primarySelectedIds`. Drives outline overlays + inspector visibility.
+   * Empty array = nothing selected.
    */
   selectedEntityIds: Guid[]
+  /**
+   * Entities the user explicitly tapped / shift-clicked, in selection order.
+   * Macro ops (Distribute, Align, Rotate, Normalize) read this so they don't
+   * "double move" descendants — Three's scene graph already cascades parent
+   * transforms onto children. m#10b fill-mode keys on
+   * `primarySelectedIds.length === 1` so long-pressing a parent (which
+   * collapses to self-only) still arms fill-container correctly.
+   */
+  primarySelectedIds: Guid[]
+  /**
+   * Whether the most recent selection action expanded primaries to include
+   * their descendants ('extend', the default for taps and shift-taps) or kept
+   * the selection narrow to the explicit picks ('self-only', triggered by
+   * long-press). One global flag is sufficient because the next selection
+   * action resets it. Stored on the store so consumers (outlines, ops) can
+   * read it without prop-drilling. */
+  selectionExtensionMode: 'extend' | 'self-only'
   /** Current placement mode (toolbar +Bed / +Plant / +Prefab) or null. */
   placement: PlacementState | null
   /** Transient error string surfaced as a toast in the edit panel. */
@@ -409,9 +495,27 @@ export interface GardenState {
    *     id is null. Equivalent to a fresh single-click.
    *   - additive=true: toggles `id` in the selection (adding if absent,
    *     removing if present). Empty-input id is a no-op.
+   *   - extension='extend' (default): the picked id is treated as a parent;
+   *     its transitive descendants are auto-included in the effective
+   *     selection (`selectedEntityIds`) so visuals + macro ops cascade. The
+   *     `primarySelectedIds` list still records only the explicit pick.
+   *   - extension='self-only': long-press behavior — descendants are NOT
+   *     pulled in. Macro ops therefore stay scoped to the parent itself,
+   *     useful for moving a bed without reflowing its plants visually-only.
+   *
+   * In additive mode, `extension` applies to the WHOLE selection (every
+   * primary expands or stays narrow uniformly). This keeps the model simple
+   * — the user can re-tap to flip the mode for the entire group.
    */
-  selectEntity: (id: Guid | null, additive?: boolean) => void
-  /** Replace the selection with an explicit array. */
+  selectEntity: (
+    id: Guid | null,
+    additive?: boolean,
+    extension?: 'extend' | 'self-only',
+  ) => void
+  /** Replace the selection with an explicit array. Treats every id as a
+   *  primary pick and applies the global `selectionExtensionMode` (defaults
+   *  to 'extend' on a fresh array). Used by Duplicate-all to jump selection
+   *  to the new copies. */
   selectEntities: (ids: Guid[]) => void
   /** Drop all selection (entity selection only — wall selection is separate). */
   clearSelection: () => void
@@ -473,6 +577,8 @@ export const useGarden = create<GardenState>((set, get) => ({
   loading: false,
   error: null,
   selectedEntityIds: [],
+  primarySelectedIds: [],
+  selectionExtensionMode: 'extend',
   placement: null,
   toast: null,
   translateModeId: null,
@@ -499,6 +605,8 @@ export const useGarden = create<GardenState>((set, get) => ({
       entities: {},
       nudges: [],
       selectedEntityIds: [],
+      primarySelectedIds: [],
+      selectionExtensionMode: 'extend',
       placement: null,
       translateModeId: null,
       groupTranslateActive: false,
@@ -532,17 +640,31 @@ export const useGarden = create<GardenState>((set, get) => ({
       if (!(id in s.entities)) return s
       const next = { ...s.entities }
       delete next[id]
-      // Drop the id from the selection list if present.
-      const selectedEntityIds = s.selectedEntityIds.includes(id)
-        ? s.selectedEntityIds.filter((x) => x !== id)
-        : s.selectedEntityIds
+      // Drop the id from BOTH the primary list and the effective selection
+      // list. We then re-expand primaries against the post-removal entities
+      // map so a deleted parent's now-orphaned children stop appearing in the
+      // effective selection. (`selectionExtensionMode` is preserved.)
+      const primarySelectedIds = s.primarySelectedIds.includes(id)
+        ? s.primarySelectedIds.filter((x) => x !== id)
+        : s.primarySelectedIds
+      const selectedEntityIds = expandSelection(
+        primarySelectedIds,
+        next,
+        s.selectionExtensionMode,
+      ).filter((x) => x !== id)
       // Cancel single-entity translate if the removed entity was its target.
       const translateModeId = s.translateModeId === id ? null : s.translateModeId
       // If the active group-translate target evaporated below 2 entities,
       // also exit group-translate.
       const groupTranslateActive =
         s.groupTranslateActive && selectedEntityIds.length >= 2 ? s.groupTranslateActive : false
-      return { entities: next, selectedEntityIds, translateModeId, groupTranslateActive }
+      return {
+        entities: next,
+        primarySelectedIds,
+        selectedEntityIds,
+        translateModeId,
+        groupTranslateActive,
+      }
     })
   },
 
@@ -554,25 +676,34 @@ export const useGarden = create<GardenState>((set, get) => ({
     set((s) => ({ nudges: s.nudges.filter((n) => n.entityId !== entityId) }))
   },
 
-  selectEntity: (id, additive = false) => {
+  selectEntity: (id, additive = false, extension = 'extend') => {
     // Selecting a garden entity clears any wall selection so we never show
     // two inspectors at once.
     set((s) => {
-      let selectedEntityIds: Guid[]
+      let primarySelectedIds: Guid[]
       if (additive) {
         if (!id) return s // no-op: additive null is meaningless
-        const i = s.selectedEntityIds.indexOf(id)
+        const i = s.primarySelectedIds.indexOf(id)
         if (i >= 0) {
-          // Toggle off
-          selectedEntityIds = s.selectedEntityIds.filter((x) => x !== id)
+          // Toggle off — remove from primaries; effective selection rebuilds.
+          primarySelectedIds = s.primarySelectedIds.filter((x) => x !== id)
         } else {
           // Toggle on
-          selectedEntityIds = [...s.selectedEntityIds, id]
+          primarySelectedIds = [...s.primarySelectedIds, id]
         }
       } else {
         // Replace
-        selectedEntityIds = id ? [id] : []
+        primarySelectedIds = id ? [id] : []
       }
+      // Apply the new extension mode globally — every primary is expanded (or
+      // not) under the same rule. The next select action will reset this
+      // flag, so a user dragging a normal tap stays in extend even if the
+      // previous selection was self-only.
+      const selectedEntityIds = expandSelection(
+        primarySelectedIds,
+        s.entities,
+        extension,
+      )
       // Translate-mode cleanup: single-entity translate requires that exact
       // id to remain selected. Group translate requires >=2 selected.
       const translateModeId =
@@ -582,7 +713,9 @@ export const useGarden = create<GardenState>((set, get) => ({
       const groupTranslateActive =
         s.groupTranslateActive && selectedEntityIds.length >= 2 ? s.groupTranslateActive : false
       return {
+        primarySelectedIds,
         selectedEntityIds,
+        selectionExtensionMode: extension,
         selectedWallId: id ? null : s.selectedWallId,
         translateModeId,
         groupTranslateActive,
@@ -592,15 +725,20 @@ export const useGarden = create<GardenState>((set, get) => ({
 
   selectEntities: (ids) => {
     set((s) => {
-      // De-dup while preserving first-occurrence order.
+      // De-dup while preserving first-occurrence order. Each id becomes a
+      // primary pick; reset extension mode to the default ('extend') so
+      // descendants are pulled in for visuals (Three handles the cascade
+      // automatically; macro ops still read primarySelectedIds and so won't
+      // double-move children).
       const seen = new Set<Guid>()
-      const selectedEntityIds: Guid[] = []
+      const primarySelectedIds: Guid[] = []
       for (const id of ids) {
         if (id && !seen.has(id)) {
           seen.add(id)
-          selectedEntityIds.push(id)
+          primarySelectedIds.push(id)
         }
       }
+      const selectedEntityIds = expandSelection(primarySelectedIds, s.entities, 'extend')
       const translateModeId =
         s.translateModeId && !selectedEntityIds.includes(s.translateModeId)
           ? null
@@ -608,7 +746,9 @@ export const useGarden = create<GardenState>((set, get) => ({
       const groupTranslateActive =
         s.groupTranslateActive && selectedEntityIds.length >= 2 ? s.groupTranslateActive : false
       return {
+        primarySelectedIds,
         selectedEntityIds,
+        selectionExtensionMode: 'extend',
         selectedWallId: selectedEntityIds.length > 0 ? null : s.selectedWallId,
         translateModeId,
         groupTranslateActive,
@@ -619,6 +759,8 @@ export const useGarden = create<GardenState>((set, get) => ({
   clearSelection: () => {
     set((s) => ({
       selectedEntityIds: [],
+      primarySelectedIds: [],
+      selectionExtensionMode: 'extend',
       translateModeId: null,
       groupTranslateActive: false,
       // Wall selection is separate; leave it.
@@ -627,9 +769,13 @@ export const useGarden = create<GardenState>((set, get) => ({
   },
 
   getSelected: () => {
-    const { selectedEntityIds, entities } = get()
-    if (selectedEntityIds.length !== 1) return null
-    return entities[selectedEntityIds[0]] ?? null
+    // "Exactly one selected" means exactly one explicit primary pick. With
+    // extend-mode selections an effective selection of [bed, plant1, plant2]
+    // still counts as a single primary pick of the bed — we want
+    // InspectorCard to show the bed's pill, not the multi-inspector.
+    const { primarySelectedIds, entities } = get()
+    if (primarySelectedIds.length !== 1) return null
+    return entities[primarySelectedIds[0]] ?? null
   },
 
   setPlacement: (p) => {
@@ -687,10 +833,13 @@ export const useGarden = create<GardenState>((set, get) => ({
 
   selectWall: (id) => {
     // Selecting a wall clears garden entity selection (and vice-versa) so we
-    // never show two inspectors at once.
+    // never show two inspectors at once. We clear BOTH the primary list and
+    // the effective selection so re-tapping an entity later starts fresh.
     set((s) => ({
       selectedWallId: id,
       selectedEntityIds: id ? [] : s.selectedEntityIds,
+      primarySelectedIds: id ? [] : s.primarySelectedIds,
+      selectionExtensionMode: id ? 'extend' : s.selectionExtensionMode,
       translateModeId: id ? null : s.translateModeId,
       groupTranslateActive: id ? false : s.groupTranslateActive,
     }))

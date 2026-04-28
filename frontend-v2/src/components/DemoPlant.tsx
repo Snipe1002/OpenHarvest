@@ -19,6 +19,7 @@ import { Outlines } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import type { GardenEntity, Quaternion } from '../api/types'
 import { useGarden } from '../store/garden'
+import { useEntityTapVsLongPress } from './useEntityTapVsLongPress'
 import { useGroupTranslateDrag, useTranslateDrag } from './useTranslateDrag'
 
 function quaternionToEuler(q: Quaternion): [number, number, number] {
@@ -53,10 +54,10 @@ function resolveHeight(entity: GardenEntity): number {
 }
 
 export default function DemoPlant({ entity, children }: DemoPlantProps) {
-  const selectEntity = useGarden((s) => s.selectEntity)
   const isSelected = useGarden((s) => s.selectedEntityIds.includes(entity.id))
+  const isPrimarySelected = useGarden((s) => s.primarySelectedIds.includes(entity.id))
   const isMultiSelected = useGarden(
-    (s) => s.selectedEntityIds.length >= 2 && s.selectedEntityIds.includes(entity.id),
+    (s) => s.primarySelectedIds.length >= 2 && s.primarySelectedIds.includes(entity.id),
   )
   const isTranslating = useGarden((s) => s.translateModeId === entity.id)
   const isGroupTranslating = useGarden(
@@ -64,6 +65,7 @@ export default function DemoPlant({ entity, children }: DemoPlantProps) {
   )
   const drag = useTranslateDrag(entity)
   const groupDrag = useGroupTranslateDrag(entity)
+  const tap = useEntityTapVsLongPress(entity.id)
 
   const { x: px, y: py, z: pz } = entity.transform.position
   const stemHeight = resolveHeight(entity)
@@ -96,12 +98,35 @@ export default function DemoPlant({ entity, children }: DemoPlantProps) {
       return
     }
     e.stopPropagation()
-    const { multiSelectMode } = useGarden.getState()
-    const additive = e.nativeEvent.shiftKey || multiSelectMode
-    selectEntity(entity.id, additive)
+    // Selection-arm: distinguish tap (extend) from long-press (self-only).
+    tap.onTapPointerDown(e)
   }
 
-  const outlineColor = isMultiSelected ? '#4ec9ff' : '#ffaa00'
+  const handlePointerUp = (e: ThreeEvent<PointerEvent>) => {
+    if (e.nativeEvent.isPrimary === false) return
+    if (isTranslating) {
+      drag.onPointerUp(e)
+      return
+    }
+    if (isGroupTranslating) {
+      groupDrag.onPointerUp(e)
+      return
+    }
+    tap.onTapPointerUp(e)
+  }
+
+  // See DemoBed for the full reasoning on the three outline states. Plants
+  // are typically descendants — when the user taps a parent in extend mode
+  // they get the dimmed/thin outline, signaling "selection cascaded here".
+  const isExtension = isSelected && !isPrimarySelected
+  const outlineColor = isExtension
+    ? isMultiSelected
+      ? '#3a8acc'
+      : '#cc7a00'
+    : isMultiSelected
+      ? '#4ec9ff'
+      : '#ffaa00'
+  const outlineThickness = isExtension ? 2 : 4
 
   return (
     <group
@@ -111,15 +136,15 @@ export default function DemoPlant({ entity, children }: DemoPlantProps) {
       onPointerMove={
         isTranslating ? drag.onPointerMove : isGroupTranslating ? groupDrag.onPointerMove : undefined
       }
-      onPointerUp={
-        isTranslating ? drag.onPointerUp : isGroupTranslating ? groupDrag.onPointerUp : undefined
-      }
+      onPointerUp={handlePointerUp}
+      onPointerCancel={tap.onTapPointerCancel}
+      onPointerLeave={tap.onTapPointerCancel}
     >
       {/* Stem */}
       <mesh position={[0, stemHeight / 2, 0]} castShadow>
         <cylinderGeometry args={[stemRadius, stemRadius, stemHeight, 8]} />
         <meshStandardMaterial color="#4a8a3a" roughness={0.8} metalness={0} />
-        {isSelected && <Outlines thickness={4} color={outlineColor} />}
+        {isSelected && <Outlines thickness={outlineThickness} color={outlineColor} />}
       </mesh>
       {/* Leaf 1 */}
       <mesh position={[leafSize / 2, stemHeight * 0.85, 0]} rotation={[0, 0, Math.PI / 6]} castShadow>
