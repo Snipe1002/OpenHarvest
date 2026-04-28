@@ -292,6 +292,15 @@ export interface GardenState {
   groupTranslateActive: boolean
 
   /**
+   * When true, the user is currently press-hold-dragging one of the inspector
+   * ⇄ buttons (single OR group). The button itself acts as the drag handle so
+   * the user's finger doesn't occlude the entity being moved. While active,
+   * camera orbit is suspended (see App.tsx CameraControls.enabled). Cleared
+   * on pointer-up regardless of whether the drag committed or reverted.
+   */
+  buttonDragActive: boolean
+
+  /**
    * Snap distance in meters for translate / wall-corner placement, or null
    * for free movement. Persisted to localStorage.
    */
@@ -385,6 +394,8 @@ export interface GardenState {
   setTranslateMode: (id: Guid | null) => void
   /** Enter / exit group translate mode (drags every selected entity by a uniform delta). */
   setGroupTranslateActive: (v: boolean) => void
+  /** Set the button-drag-active flag (used to suspend camera orbit during ⇄-button drag). */
+  setButtonDragActive: (v: boolean) => void
   /** Set the snap value, persist to localStorage. */
   setSnap: (v: SnapValue) => void
   /** Toggle / set snap mode (edge ↔ center), persist to localStorage. */
@@ -431,6 +442,7 @@ export const useGarden = create<GardenState>((set, get) => ({
   toast: null,
   translateModeId: null,
   groupTranslateActive: false,
+  buttonDragActive: false,
   snap: readPersistedSnap(),
   snapMode: readPersistedSnapMode(),
   housePlacement: null,
@@ -608,6 +620,10 @@ export const useGarden = create<GardenState>((set, get) => ({
       groupTranslateActive: v && s.selectedEntityIds.length >= 2,
       translateModeId: v ? null : s.translateModeId,
     }))
+  },
+
+  setButtonDragActive: (v) => {
+    set({ buttonDragActive: v })
   },
 
   setSnap: (v) => {
