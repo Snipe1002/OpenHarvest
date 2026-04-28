@@ -75,6 +75,12 @@ export default function DemoBed({ entity, children }: DemoBedProps) {
   )
 
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+    // Multi-touch guard: only act on the primary pointer. The secondary
+    // pointer of a pinch-zoom must pass through to drei's CameraControls
+    // so the user can pinch ON an entity to zoom (otherwise stopPropagation
+    // starves the camera and the render goes blank).
+    if (e.nativeEvent.isPrimary === false) return
+
     if (isTranslating) {
       // Single-entity drag takes over — entity is already selected.
       drag.onPointerDown(e)

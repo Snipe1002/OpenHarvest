@@ -82,6 +82,11 @@ export default function DemoPlant({ entity, children }: DemoPlantProps) {
   )
 
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+    // Multi-touch guard — only act on the primary pointer; secondary
+    // pointers must reach drei's CameraControls so pinch-zoom on an
+    // entity works without starving the camera.
+    if (e.nativeEvent.isPrimary === false) return
+
     if (isTranslating) {
       drag.onPointerDown(e)
       return
