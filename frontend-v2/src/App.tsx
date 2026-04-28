@@ -10,6 +10,7 @@ import InspectorCard from './components/InspectorCard'
 import MainToolbar from './components/MainToolbar'
 import MultiChip from './components/MultiChip'
 import MultiSelectInspector from './components/MultiSelectInspector'
+import R3FSceneBridge from './components/r3fSceneBridge'
 import RegionPaint from './components/RegionPaint'
 import SampleBuilding from './components/SampleBuilding'
 import SnapChip from './components/SnapChip'
@@ -50,6 +51,10 @@ export default function App() {
   const entities = useGarden((s) => s.entities)
   const translateModeId = useGarden((s) => s.translateModeId)
   const groupTranslateActive = useGarden((s) => s.groupTranslateActive)
+  // Button-drag (press-hold on the ⇄ button itself, finger off the entity)
+  // also needs to suspend camera orbit so the canvas doesn't pan along with
+  // the finger. See `useButtonDragHandle` for the lifecycle.
+  const buttonDragActive = useGarden((s) => s.buttonDragActive)
   // Camera orbit pauses while the user is mid-region-drag so the view doesn't
   // pan with the second-corner pointer move. Other region phases (awaiting
   // first corner, configuring) leave camera orbit alone — the rectangle is
@@ -196,11 +201,22 @@ export default function App() {
       <SampleBuilding />
       <Viewer selectionManager="custom">
         {/* Camera orbit is suspended while the user is dragging an entity in
-            single OR group translate mode, or mid-region-paint-drag, so the
-            view doesn't pan along with the pointer. */}
+            single OR group translate mode, mid-region-paint-drag, OR mid-
+            button-drag (finger pressed on an inspector ⇄ button as the drag
+            handle), so the view doesn't pan along with the pointer. */}
         <CameraControls
-          enabled={!translateModeId && !groupTranslateActive && !regionDragActive}
+          enabled={
+            !translateModeId &&
+            !groupTranslateActive &&
+            !regionDragActive &&
+            !buttonDragActive
+          }
         />
+        {/* Captures camera/renderer/raycaster into a module-level singleton
+            so `useButtonDragHandle` can raycast the finger onto the ground
+            plane from outside the R3F tree (MultiSelectInspector lives in
+            the DOM, not under the Canvas). */}
+        <R3FSceneBridge />
         <DemoGround />
         {renderChildren(null, new Set())}
         {orphanRoots.map((e) => (

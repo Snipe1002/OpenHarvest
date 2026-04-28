@@ -27,6 +27,7 @@ import type {
 } from '../api/types'
 import { useGarden } from '../store/garden'
 import { formatLength, parseLength, type Units } from '../store/unitsHelpers'
+import { useButtonDragHandle } from './useButtonDragHandle'
 
 /**
  * drei `<Html>` `calculatePosition` override. Replicates the default
@@ -293,6 +294,24 @@ export default function InspectorCard() {
     setExpanded(false)
   }, [selectedId])
 
+  // Button-as-drag-handle for the ⇄ button. Tap toggles legacy translate-mode
+  // (preserving the "drag the entity directly" path for power users). Press-
+  // hold-drag past ~6px screen movement directly drags the entity, finger
+  // staying on the button so it doesn't occlude what's being moved.
+  //
+  // IMPORTANT: this hook MUST be called unconditionally — i.e. above the
+  // early-return below — otherwise React's hook-order check fires when the
+  // selection becomes empty (entity goes null). Pass `entity ?? undefined`;
+  // the hook bails harmlessly when it's missing.
+  const buttonDrag = useButtonDragHandle({
+    entity: entity ?? undefined,
+    onTap: () =>
+      entity &&
+      setTranslateMode(
+        useGarden.getState().translateModeId === entity.id ? null : entity.id,
+      ),
+  })
+
   if (!entity || !gardenId) return null
 
   const { x: ax, y: ay, z: az } = entity.transform.position
@@ -348,10 +367,6 @@ export default function InspectorCard() {
     const nextRotation = rotateY90(entity.transform.rotation)
     const nextTransform: Transform = { ...entity.transform, rotation: nextRotation }
     void patch({ ...entity, transform: nextTransform }, { transform: nextTransform })
-  }
-
-  const onTranslate = () => {
-    setTranslateMode(entity.id)
   }
 
   const onDuplicate = async () => {
@@ -495,7 +510,11 @@ export default function InspectorCard() {
           <button style={ICON_BUTTON} onClick={onRotate} title="Rotate 90°">
             ⟳
           </button>
-          <button style={ICON_BUTTON} onClick={onTranslate} title="Translate (drag to move)">
+          <button
+            style={ICON_BUTTON}
+            onPointerDown={buttonDrag.onPointerDown}
+            title="Tap to toggle translate mode, or press and drag to move directly"
+          >
             ⇄
           </button>
           <button style={ICON_BUTTON} onClick={onDuplicate} title="Duplicate">

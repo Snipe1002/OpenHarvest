@@ -45,6 +45,7 @@ import { ApiError, createEntity, deleteEntity, updateEntity } from '../api/clien
 import type { CreateEntityRequest, GardenEntity, Quaternion } from '../api/types'
 import { useGarden } from '../store/garden'
 import { formatLength } from '../store/unitsHelpers'
+import { useButtonDragHandle } from './useButtonDragHandle'
 
 const PILL_STYLE: React.CSSProperties = {
   display: 'flex',
@@ -273,6 +274,16 @@ export default function MultiSelectInspector() {
   // when this component conditionally returns null below. Keep this above
   // the early return.
   const toolbarBottom = useToolbarOffset()
+
+  // Button-as-drag-handle for the group-translate ⇄. Tap toggles
+  // `groupTranslateActive` (legacy behavior — drag any selected entity);
+  // press-hold-drag past ~6px screen movement drags the whole selection
+  // directly with the leader being the first selected id. Hook MUST be
+  // called unconditionally — keep above the early return.
+  const groupButtonDrag = useButtonDragHandle({
+    onTap: () => setGroupTranslateActive(!groupTranslateActive),
+    getSelectedIds: () => useGarden.getState().selectedEntityIds,
+  })
 
   if (selected.length < 2 || !gardenId) return null
 
@@ -508,12 +519,12 @@ export default function MultiSelectInspector() {
                 ? ACTIVE_BUTTON
                 : ICON_BUTTON
           }
-          onClick={() => setGroupTranslateActive(!groupTranslateActive)}
+          onPointerDown={buttonDisabled ? undefined : groupButtonDrag.onPointerDown}
           disabled={buttonDisabled}
           title={
             groupTranslateActive
-              ? 'Group translate ON — drag any selected entity to move all (Esc to exit)'
-              : 'Enter group translate (drag any selected entity to move all)'
+              ? 'Group translate ON — tap to exit, or press and drag this button to move all (Esc to exit)'
+              : 'Tap to enter group translate, or press and drag this button to move all directly'
           }
         >
           ⇄
