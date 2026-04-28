@@ -15,6 +15,23 @@
          pull-to-refresh / rubber-band at the edges. */
       html, body { overscroll-behavior: none; overscroll-behavior-x: none; }
       canvas { touch-action: none; }
+      /* iOS Safari long-press triggers a text selection callout (Copy /
+         Find Selection / Look Up) on label text inside HUD pills and
+         buttons, often extending the selection across multiple pills —
+         see the bug report screenshot from 2026-04-28. `user-select: none`
+         on individual chips is ignored by iOS for button labels and
+         non-interactive spans; the working fix is a global default with
+         the WebKit prefixes, then opt back in for actual editable fields. */
+      body {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      input, textarea, [contenteditable="true"] {
+        -webkit-touch-callout: default;
+        -webkit-user-select: text;
+        user-select: text;
+      }
     </style>
   </head>
   <body>
