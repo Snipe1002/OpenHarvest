@@ -121,6 +121,9 @@ function PrefabPlaceholder({ entity, children }: { entity: GardenEntity; childre
   const { x, y, z } = entity.transform.position
   const slug = entity.geometry.prefabRef ?? entity.kind
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+    // Multi-touch guard: secondary pointers fall through so pinch-zoom on
+    // an entity reaches drei's CameraControls.
+    if (e.nativeEvent.isPrimary === false) return
     if (isTranslating) {
       drag.onPointerDown(e)
       return
@@ -181,6 +184,9 @@ function UnknownDebugCube({ entity, children }: { entity: GardenEntity; children
   // Show whatever is most descriptive — prefer prefab slug, fall back to kind.
   const label = entity.geometry.prefabRef ?? `${entity.kind}:${entity.geometry.kind}`
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+    // Multi-touch guard: secondary pointers fall through so pinch-zoom on
+    // an entity reaches drei's CameraControls.
+    if (e.nativeEvent.isPrimary === false) return
     if (isTranslating) {
       drag.onPointerDown(e)
       return
