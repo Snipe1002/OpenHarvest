@@ -217,15 +217,15 @@ function NumberField({ label, value, onCommit, min }: NumberFieldProps) {
 }
 
 export default function InspectorCard() {
-  // The single-entity inspector only mounts when EXACTLY one entity is
-  // selected. When zero or multiple are selected, it returns null and the
-  // MultiSelectInspector takes over (for >=2). We intentionally subscribe to
-  // the id only and look the entity up from the entities dict in a separate
-  // selector — this way a re-render caused by an entity-content change
-  // doesn't churn the `entity` reference identity for useEffect deps that
-  // key off `entity.id`.
+  // The single-entity inspector only mounts when EXACTLY one entity has
+  // been EXPLICITLY picked (one primary). When zero or multiple primaries
+  // are picked, it returns null and the MultiSelectInspector takes over
+  // (for >=2 primaries). We key off `primarySelectedIds`, not the full
+  // effective selection — selecting a parent in extend mode includes its
+  // descendants in `selectedEntityIds`, but conceptually that's still one
+  // pick and InspectorCard should show the parent's pill.
   const selectedId = useGarden((s) =>
-    s.selectedEntityIds.length === 1 ? s.selectedEntityIds[0] : null,
+    s.primarySelectedIds.length === 1 ? s.primarySelectedIds[0] : null,
   )
   const entity = useGarden((s) => (selectedId ? s.entities[selectedId] ?? null : null))
   // Parent lookup: subscribed separately so the chip updates if the user

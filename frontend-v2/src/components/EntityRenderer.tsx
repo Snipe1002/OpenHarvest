@@ -30,6 +30,7 @@ import DemoBed from './DemoBed'
 import DemoPlant from './DemoPlant'
 import type { GardenEntity, Vector3 } from '../api/types'
 import { useGarden } from '../store/garden'
+import { useEntityTapVsLongPress } from './useEntityTapVsLongPress'
 import { useGroupTranslateDrag, useTranslateDrag } from './useTranslateDrag'
 
 const BED_PREFABS = new Set(['raised-bed-wood', 'square-planter'])
@@ -107,10 +108,10 @@ export default function EntityRenderer({
 }
 
 function PrefabPlaceholder({ entity, children }: { entity: GardenEntity; children?: ReactNode }) {
-  const selectEntity = useGarden((s) => s.selectEntity)
   const isSelected = useGarden((s) => s.selectedEntityIds.includes(entity.id))
+  const isPrimarySelected = useGarden((s) => s.primarySelectedIds.includes(entity.id))
   const isMultiSelected = useGarden(
-    (s) => s.selectedEntityIds.length >= 2 && s.selectedEntityIds.includes(entity.id),
+    (s) => s.primarySelectedIds.length >= 2 && s.primarySelectedIds.includes(entity.id),
   )
   const isTranslating = useGarden((s) => s.translateModeId === entity.id)
   const isGroupTranslating = useGarden(
@@ -118,6 +119,7 @@ function PrefabPlaceholder({ entity, children }: { entity: GardenEntity; childre
   )
   const drag = useTranslateDrag(entity)
   const groupDrag = useGroupTranslateDrag(entity)
+  const tap = useEntityTapVsLongPress(entity.id)
   const { x, y, z } = entity.transform.position
   const slug = entity.geometry.prefabRef ?? entity.kind
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
@@ -133,11 +135,30 @@ function PrefabPlaceholder({ entity, children }: { entity: GardenEntity; childre
       return
     }
     e.stopPropagation()
-    const { multiSelectMode } = useGarden.getState()
-    const additive = e.nativeEvent.shiftKey || multiSelectMode
-    selectEntity(entity.id, additive)
+    tap.onTapPointerDown(e)
   }
-  const outlineColor = isMultiSelected ? '#4ec9ff' : '#ffaa00'
+  const handlePointerUp = (e: ThreeEvent<PointerEvent>) => {
+    if (e.nativeEvent.isPrimary === false) return
+    if (isTranslating) {
+      drag.onPointerUp(e)
+      return
+    }
+    if (isGroupTranslating) {
+      groupDrag.onPointerUp(e)
+      return
+    }
+    tap.onTapPointerUp(e)
+  }
+  // See DemoBed for the three-state outline rationale.
+  const isExtension = isSelected && !isPrimarySelected
+  const outlineColor = isExtension
+    ? isMultiSelected
+      ? '#3a8acc'
+      : '#cc7a00'
+    : isMultiSelected
+      ? '#4ec9ff'
+      : '#ffaa00'
+  const outlineThickness = isExtension ? 2 : 4
   return (
     <group
       position={[x, y, z]}
@@ -145,14 +166,14 @@ function PrefabPlaceholder({ entity, children }: { entity: GardenEntity; childre
       onPointerMove={
         isTranslating ? drag.onPointerMove : isGroupTranslating ? groupDrag.onPointerMove : undefined
       }
-      onPointerUp={
-        isTranslating ? drag.onPointerUp : isGroupTranslating ? groupDrag.onPointerUp : undefined
-      }
+      onPointerUp={handlePointerUp}
+      onPointerCancel={tap.onTapPointerCancel}
+      onPointerLeave={tap.onTapPointerCancel}
     >
       <mesh position={[0, 0.25, 0]} castShadow receiveShadow>
         <boxGeometry args={[0.5, 0.5, 0.5]} />
         <meshStandardMaterial color="#a08c5e" roughness={0.6} metalness={0} />
-        {isSelected && <Outlines thickness={4} color={outlineColor} />}
+        {isSelected && <Outlines thickness={outlineThickness} color={outlineColor} />}
       </mesh>
       <Text
         position={[0, 0.85, 0]}
@@ -169,10 +190,10 @@ function PrefabPlaceholder({ entity, children }: { entity: GardenEntity; childre
 }
 
 function UnknownDebugCube({ entity, children }: { entity: GardenEntity; children?: ReactNode }) {
-  const selectEntity = useGarden((s) => s.selectEntity)
   const isSelected = useGarden((s) => s.selectedEntityIds.includes(entity.id))
+  const isPrimarySelected = useGarden((s) => s.primarySelectedIds.includes(entity.id))
   const isMultiSelected = useGarden(
-    (s) => s.selectedEntityIds.length >= 2 && s.selectedEntityIds.includes(entity.id),
+    (s) => s.primarySelectedIds.length >= 2 && s.primarySelectedIds.includes(entity.id),
   )
   const isTranslating = useGarden((s) => s.translateModeId === entity.id)
   const isGroupTranslating = useGarden(
@@ -180,6 +201,7 @@ function UnknownDebugCube({ entity, children }: { entity: GardenEntity; children
   )
   const drag = useTranslateDrag(entity)
   const groupDrag = useGroupTranslateDrag(entity)
+  const tap = useEntityTapVsLongPress(entity.id)
   const { x, y, z } = entity.transform.position
   // Show whatever is most descriptive — prefer prefab slug, fall back to kind.
   const label = entity.geometry.prefabRef ?? `${entity.kind}:${entity.geometry.kind}`
@@ -196,11 +218,30 @@ function UnknownDebugCube({ entity, children }: { entity: GardenEntity; children
       return
     }
     e.stopPropagation()
-    const { multiSelectMode } = useGarden.getState()
-    const additive = e.nativeEvent.shiftKey || multiSelectMode
-    selectEntity(entity.id, additive)
+    tap.onTapPointerDown(e)
   }
-  const outlineColor = isMultiSelected ? '#4ec9ff' : '#ffaa00'
+  const handlePointerUp = (e: ThreeEvent<PointerEvent>) => {
+    if (e.nativeEvent.isPrimary === false) return
+    if (isTranslating) {
+      drag.onPointerUp(e)
+      return
+    }
+    if (isGroupTranslating) {
+      groupDrag.onPointerUp(e)
+      return
+    }
+    tap.onTapPointerUp(e)
+  }
+  // See DemoBed for the three-state outline rationale.
+  const isExtension = isSelected && !isPrimarySelected
+  const outlineColor = isExtension
+    ? isMultiSelected
+      ? '#3a8acc'
+      : '#cc7a00'
+    : isMultiSelected
+      ? '#4ec9ff'
+      : '#ffaa00'
+  const outlineThickness = isExtension ? 2 : 4
   return (
     <group
       position={[x, y, z]}
@@ -208,14 +249,14 @@ function UnknownDebugCube({ entity, children }: { entity: GardenEntity; children
       onPointerMove={
         isTranslating ? drag.onPointerMove : isGroupTranslating ? groupDrag.onPointerMove : undefined
       }
-      onPointerUp={
-        isTranslating ? drag.onPointerUp : isGroupTranslating ? groupDrag.onPointerUp : undefined
-      }
+      onPointerUp={handlePointerUp}
+      onPointerCancel={tap.onTapPointerCancel}
+      onPointerLeave={tap.onTapPointerCancel}
     >
       <mesh position={[0, 0.15, 0]} castShadow>
         <boxGeometry args={[0.3, 0.3, 0.3]} />
         <meshStandardMaterial color="#ff00ff" roughness={0.5} metalness={0} />
-        {isSelected && <Outlines thickness={4} color={outlineColor} />}
+        {isSelected && <Outlines thickness={outlineThickness} color={outlineColor} />}
       </mesh>
       <Text
         position={[0, 0.55, 0]}

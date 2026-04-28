@@ -20,6 +20,7 @@ import { Outlines } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import type { GardenEntity, Quaternion } from '../api/types'
 import { useGarden } from '../store/garden'
+import { useEntityTapVsLongPress } from './useEntityTapVsLongPress'
 import { useGroupTranslateDrag, useTranslateDrag } from './useTranslateDrag'
 
 interface DemoBedProps {
@@ -45,10 +46,10 @@ function quaternionToEuler(q: Quaternion): [number, number, number] {
 }
 
 export default function DemoBed({ entity, children }: DemoBedProps) {
-  const selectEntity = useGarden((s) => s.selectEntity)
   const isSelected = useGarden((s) => s.selectedEntityIds.includes(entity.id))
+  const isPrimarySelected = useGarden((s) => s.primarySelectedIds.includes(entity.id))
   const isMultiSelected = useGarden(
-    (s) => s.selectedEntityIds.length >= 2 && s.selectedEntityIds.includes(entity.id),
+    (s) => s.primarySelectedIds.length >= 2 && s.primarySelectedIds.includes(entity.id),
   )
   const isTranslating = useGarden((s) => s.translateModeId === entity.id)
   const isGroupTranslating = useGarden(
@@ -56,6 +57,7 @@ export default function DemoBed({ entity, children }: DemoBedProps) {
   )
   const drag = useTranslateDrag(entity)
   const groupDrag = useGroupTranslateDrag(entity)
+  const tap = useEntityTapVsLongPress(entity.id)
 
   const [w, h, l] = resolveSize(entity)
   const t = 0.05 // plank thickness
@@ -92,12 +94,44 @@ export default function DemoBed({ entity, children }: DemoBedProps) {
       return
     }
     e.stopPropagation()
-    const { multiSelectMode } = useGarden.getState()
-    const additive = e.nativeEvent.shiftKey || multiSelectMode
-    selectEntity(entity.id, additive)
+    // Selection now fires on pointer-up via the tap-vs-long-press helper —
+    // arming the timer here lets us distinguish a quick tap (extend) from a
+    // 500ms hold (self-only). If neither drag path took over, this is the
+    // selection arm of the gesture.
+    tap.onTapPointerDown(e)
   }
 
-  const outlineColor = isMultiSelected ? '#4ec9ff' : '#ffaa00'
+  const handlePointerUp = (e: ThreeEvent<PointerEvent>) => {
+    if (e.nativeEvent.isPrimary === false) return
+    if (isTranslating) {
+      drag.onPointerUp(e)
+      return
+    }
+    if (isGroupTranslating) {
+      groupDrag.onPointerUp(e)
+      return
+    }
+    // Pure selection branch: fire the tap (extend) iff the timer is still
+    // pending; otherwise the long-press already fired during the hold.
+    tap.onTapPointerUp(e)
+  }
+
+  // Outline visual distinguishes three states:
+  //   - primary multi-select (>=2 explicit picks):  thick cyan
+  //   - primary single-select:                        thick orange
+  //   - extension (descendant pulled in by extend):   thin dimmed orange/cyan
+  // Distinguishing extension from primary helps the user see "I selected
+  // the bed; the plants came along for free" without confusing it with
+  // shift-click multi-select.
+  const isExtension = isSelected && !isPrimarySelected
+  const outlineColor = isExtension
+    ? isMultiSelected
+      ? '#3a8acc'
+      : '#cc7a00'
+    : isMultiSelected
+      ? '#4ec9ff'
+      : '#ffaa00'
+  const outlineThickness = isExtension ? 2 : 4
 
   // All plank/soil coords are RELATIVE to the group center (which sits at the
   // bed's mid-height). Rotation on the group then rotates the whole bed
@@ -110,33 +144,33 @@ export default function DemoBed({ entity, children }: DemoBedProps) {
       onPointerMove={
         isTranslating ? drag.onPointerMove : isGroupTranslating ? groupDrag.onPointerMove : undefined
       }
-      onPointerUp={
-        isTranslating ? drag.onPointerUp : isGroupTranslating ? groupDrag.onPointerUp : undefined
-      }
+      onPointerUp={handlePointerUp}
+      onPointerCancel={tap.onTapPointerCancel}
+      onPointerLeave={tap.onTapPointerCancel}
     >
       {/* +X plank */}
       <mesh position={[w / 2 - t / 2, 0, 0]} castShadow receiveShadow>
         <boxGeometry args={[t, h, l]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
-        {isSelected && <Outlines thickness={4} color={outlineColor} />}
+        {isSelected && <Outlines thickness={outlineThickness} color={outlineColor} />}
       </mesh>
       {/* -X plank */}
       <mesh position={[-w / 2 + t / 2, 0, 0]} castShadow receiveShadow>
         <boxGeometry args={[t, h, l]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
-        {isSelected && <Outlines thickness={4} color={outlineColor} />}
+        {isSelected && <Outlines thickness={outlineThickness} color={outlineColor} />}
       </mesh>
       {/* +Z plank */}
       <mesh position={[0, 0, l / 2 - t / 2]} castShadow receiveShadow>
         <boxGeometry args={[w, h, t]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
-        {isSelected && <Outlines thickness={4} color={outlineColor} />}
+        {isSelected && <Outlines thickness={outlineThickness} color={outlineColor} />}
       </mesh>
       {/* -Z plank */}
       <mesh position={[0, 0, -l / 2 + t / 2]} castShadow receiveShadow>
         <boxGeometry args={[w, h, t]} />
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
-        {isSelected && <Outlines thickness={4} color={outlineColor} />}
+        {isSelected && <Outlines thickness={outlineThickness} color={outlineColor} />}
       </mesh>
       {/* Soil — slightly inset, top sits 0.02m below frame top */}
       <mesh position={[0, h / 2 - 0.02 - (h - 0.04) / 2, 0]} receiveShadow>
