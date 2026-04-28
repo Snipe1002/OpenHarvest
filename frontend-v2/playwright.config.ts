@@ -17,6 +17,10 @@ export default defineConfig({
   testDir: './tests',
   fullyParallel: false,
   reporter: [['list']],
+  // 60s per test — WebGPU init alone can eat 8–12s, then the test does its
+  // own work + a `fullPage` screenshot which is non-trivial at 1280x720.
+  // Default 30s is borderline and flakes when nexus is cold.
+  timeout: 60_000,
   use: {
     ignoreHTTPSErrors: true,
     trace: 'off',
