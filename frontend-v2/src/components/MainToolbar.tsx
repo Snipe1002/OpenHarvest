@@ -439,6 +439,7 @@ export default function MainToolbar() {
           <div style={SECTION_STYLE}>
             <span style={SECTION_LABEL_STYLE}>Garden</span>
             <button
+              data-tour-id="tb-bed"
               style={buttonStyle(placement?.type === 'bed', gardenDisabled('bed'))}
               disabled={gardenDisabled('bed')}
               onClick={() => (placement?.type === 'bed' ? setPlacement(null) : enterGarden('bed'))}
@@ -446,6 +447,7 @@ export default function MainToolbar() {
               + Bed
             </button>
             <button
+              data-tour-id="tb-plant"
               style={buttonStyle(placement?.type === 'plant', gardenDisabled('plant'))}
               disabled={gardenDisabled('plant')}
               onClick={() => (placement?.type === 'plant' ? setPlacement(null) : enterGarden('plant'))}
@@ -453,6 +455,7 @@ export default function MainToolbar() {
               + Plant
             </button>
             <button
+              data-tour-id="tb-prefab"
               style={buttonStyle(placement?.type === 'prefab', isHousePlacing || isRegionPainting)}
               disabled={isHousePlacing || isRegionPainting}
               onClick={() => {
@@ -467,6 +470,7 @@ export default function MainToolbar() {
               + Prefab
             </button>
             <button
+              data-tour-id="tb-region"
               style={buttonStyle(isRegionPainting, regionDisabled)}
               disabled={regionDisabled}
               onClick={() => (isRegionPainting ? setRegionPaint(null) : enterRegion())}
@@ -481,6 +485,7 @@ export default function MainToolbar() {
           <div style={SECTION_STYLE}>
             <span style={SECTION_LABEL_STYLE}>House</span>
             <button
+              data-tour-id="tb-wall"
               style={buttonStyle(housePlacement?.type === 'wall', houseDisabled('wall'))}
               disabled={houseDisabled('wall')}
               onClick={() => (housePlacement?.type === 'wall' ? setHousePlacement(null) : enterHouse('wall'))}
@@ -488,6 +493,7 @@ export default function MainToolbar() {
               + Wall
             </button>
             <button
+              data-tour-id="tb-door"
               style={buttonStyle(housePlacement?.type === 'door', houseDisabled('door'))}
               disabled={houseDisabled('door')}
               onClick={() => (housePlacement?.type === 'door' ? setHousePlacement(null) : enterHouse('door'))}
@@ -495,6 +501,7 @@ export default function MainToolbar() {
               + Door
             </button>
             <button
+              data-tour-id="tb-window"
               style={buttonStyle(housePlacement?.type === 'window', houseDisabled('window'))}
               disabled={houseDisabled('window')}
               onClick={() => (housePlacement?.type === 'window' ? setHousePlacement(null) : enterHouse('window'))}

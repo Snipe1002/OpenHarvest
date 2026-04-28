@@ -810,7 +810,7 @@ export default function MultiSelectInspector() {
 
   return (
     <div style={wrapStyle} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-      <div style={HEADER_STYLE}>
+      <div data-tour-id="multi-header" style={HEADER_STYLE}>
         <span style={{ color: '#4ec9ff', fontWeight: 600 }}>{selected.length} selected</span>
         {levelLabel && (
           <span style={{ color: isMixedLevel ? '#ffaa00' : '#aaa' }}>— {levelLabel}</span>
@@ -826,7 +826,7 @@ export default function MultiSelectInspector() {
 
       {arrangeOpen && (
         <div style={ARRANGE_PANEL_STYLE}>
-          <div style={TAB_ROW_STYLE}>
+          <div data-tour-id="arrange-tabs" style={TAB_ROW_STYLE}>
             <button
               style={arrangeMode === 'grid' ? TAB_BTN_ACTIVE : TAB_BTN}
               onClick={() => setArrangeMode('grid')}
@@ -842,7 +842,7 @@ export default function MultiSelectInspector() {
           </div>
           {arrangeMode === 'grid' ? (
             <>
-              <div style={FIELD_ROW}>
+              <div data-tour-id="arrange-grid-cols" style={FIELD_ROW}>
                 <span style={FIELD_LABEL}>Cols</span>
                 <input
                   style={FIELD_INPUT}
@@ -855,7 +855,7 @@ export default function MultiSelectInspector() {
                   → {Math.ceil(selected.length / Math.max(1, parseInt(colsDraft, 10) || arrangeDefaults.cols))} rows
                 </span>
               </div>
-              <div style={FIELD_ROW}>
+              <div data-tour-id="arrange-grid-gap-x" style={FIELD_ROW}>
                 <span style={FIELD_LABEL}>Gap X</span>
                 <input
                   style={FIELD_INPUT}
@@ -864,7 +864,7 @@ export default function MultiSelectInspector() {
                   placeholder={formatLength(arrangeDefaults.gap, units)}
                 />
               </div>
-              <div style={FIELD_ROW}>
+              <div data-tour-id="arrange-grid-gap-z" style={FIELD_ROW}>
                 <span style={FIELD_LABEL}>Gap Z</span>
                 <input
                   style={FIELD_INPUT}
@@ -876,7 +876,7 @@ export default function MultiSelectInspector() {
             </>
           ) : (
             <>
-              <div style={FIELD_ROW}>
+              <div data-tour-id="arrange-ring-radius" style={FIELD_ROW}>
                 <span style={FIELD_LABEL}>Radius</span>
                 <input
                   style={FIELD_INPUT}
@@ -885,7 +885,7 @@ export default function MultiSelectInspector() {
                   placeholder={formatLength(arrangeDefaults.radius, units)}
                 />
               </div>
-              <div style={FIELD_ROW}>
+              <div data-tour-id="arrange-ring-start" style={FIELD_ROW}>
                 <span style={FIELD_LABEL}>Start °</span>
                 <input
                   style={FIELD_INPUT}
@@ -904,7 +904,7 @@ export default function MultiSelectInspector() {
             <button style={CANCEL_BTN} onClick={() => setArrangeOpen(false)} disabled={busy}>
               Cancel
             </button>
-            <button style={APPLY_BTN} onClick={onArrangeApply} disabled={busy}>
+            <button data-tour-id="arrange-apply" style={APPLY_BTN} onClick={onArrangeApply} disabled={busy}>
               {busy ? 'Applying…' : `Apply to ${selected.length}`}
             </button>
           </div>
@@ -912,6 +912,7 @@ export default function MultiSelectInspector() {
       )}
       <div style={PILL_STYLE}>
         <button
+          data-tour-id="multi-rotate"
           style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
           onClick={onRotate}
           disabled={buttonDisabled || levelLockedDisabled}
@@ -924,6 +925,7 @@ export default function MultiSelectInspector() {
           ⟳
         </button>
         <button
+          data-tour-id="multi-translate"
           style={
             buttonDisabled
               ? DISABLED_BUTTON
@@ -942,6 +944,7 @@ export default function MultiSelectInspector() {
           ⇄
         </button>
         <button
+          data-tour-id="multi-duplicate"
           style={buttonDisabled ? DISABLED_BUTTON : ICON_BUTTON}
           onClick={onDuplicateAll}
           disabled={buttonDisabled}
@@ -951,6 +954,7 @@ export default function MultiSelectInspector() {
         </button>
         <span style={{ width: 1, alignSelf: 'stretch', background: '#444', margin: '0 2px' }} />
         <button
+          data-tour-id="multi-normalize"
           style={
             buttonDisabled || !canDistribute || levelLockedDisabled
               ? DISABLED_BUTTON
@@ -969,6 +973,7 @@ export default function MultiSelectInspector() {
           ⇔
         </button>
         <button
+          data-tour-id="multi-distribute-x"
           style={
             buttonDisabled || !canDistribute || levelLockedDisabled
               ? DISABLED_BUTTON
@@ -987,6 +992,7 @@ export default function MultiSelectInspector() {
           ↔
         </button>
         <button
+          data-tour-id="multi-distribute-z"
           style={
             buttonDisabled || !canDistribute || levelLockedDisabled
               ? DISABLED_BUTTON
@@ -1006,6 +1012,7 @@ export default function MultiSelectInspector() {
         </button>
         <span style={{ width: 1, alignSelf: 'stretch', background: '#444', margin: '0 2px' }} />
         <button
+          data-tour-id="multi-align-l"
           style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
           onClick={() => onAlignX('min')}
           disabled={buttonDisabled || levelLockedDisabled}
@@ -1014,6 +1021,7 @@ export default function MultiSelectInspector() {
           ⇤
         </button>
         <button
+          data-tour-id="multi-align-r"
           style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
           onClick={() => onAlignX('max')}
           disabled={buttonDisabled || levelLockedDisabled}
@@ -1022,6 +1030,7 @@ export default function MultiSelectInspector() {
           ⇥
         </button>
         <button
+          data-tour-id="multi-align-t"
           style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
           onClick={() => onAlignZ('min')}
           disabled={buttonDisabled || levelLockedDisabled}
@@ -1034,6 +1043,7 @@ export default function MultiSelectInspector() {
           ⇩
         </button>
         <button
+          data-tour-id="multi-align-b"
           style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
           onClick={() => onAlignZ('max')}
           disabled={buttonDisabled || levelLockedDisabled}
@@ -1043,6 +1053,7 @@ export default function MultiSelectInspector() {
         </button>
         <span style={{ width: 1, alignSelf: 'stretch', background: '#444', margin: '0 2px' }} />
         <button
+          data-tour-id="multi-arrange"
           style={
             buttonDisabled || levelLockedDisabled
               ? DISABLED_BUTTON
@@ -1062,6 +1073,7 @@ export default function MultiSelectInspector() {
         </button>
         <span style={{ width: 1, alignSelf: 'stretch', background: '#444', margin: '0 2px' }} />
         <button
+          data-tour-id="multi-delete"
           style={confirmingDelete ? DELETE_CONFIRM : buttonDisabled ? DISABLED_BUTTON : DELETE_BUTTON}
           onClick={onDeleteAll}
           onBlur={() => setConfirmingDelete(false)}
@@ -1071,6 +1083,7 @@ export default function MultiSelectInspector() {
           🗑
         </button>
         <button
+          data-tour-id="multi-close"
           style={ICON_BUTTON}
           onClick={() => clearSelection()}
           title="Close (clear selection)"

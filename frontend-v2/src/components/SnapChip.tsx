@@ -104,6 +104,7 @@ export default function SnapChip() {
   return (
     <div style={SHELL_STYLE}>
       <button
+        data-tour-id="snap-value"
         style={snap === null ? VALUE_BTN : VALUE_BTN_ACTIVE}
         onClick={() => setSnap(nextSnap(snap, list))}
         title="Cycle snap distance"
@@ -111,6 +112,7 @@ export default function SnapChip() {
         {snapLabel(snap, units)}
       </button>
       <button
+        data-tour-id="snap-mode"
         style={MODE_BTN}
         onClick={() => setSnapMode(snapMode === 'edge' ? 'center' : 'edge')}
         title={

@@ -41,6 +41,7 @@ export default function UnitsChip() {
   const isImperial = units === 'imperial'
   return (
     <button
+      data-tour-id="units-chip"
       style={isImperial ? ACTIVE_STYLE : STYLE}
       onClick={() => setUnits(isImperial ? 'metric' : 'imperial')}
       title="Toggle metric ↔ imperial display units"
