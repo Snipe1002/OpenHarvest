@@ -266,7 +266,6 @@ export default function DemoGround() {
       regionPaint,
       currentGardenId,
       snap,
-      multiSelectMode,
       prefabCatalog,
     } = state
 
@@ -390,9 +389,10 @@ export default function DemoGround() {
     }
 
     // No placement — empty ground click clears selection (entity OR wall).
-    // Holding shift or being in multi-select mode preserves the selection so
-    // users don't accidentally lose a multi-pick when missing on the ground.
-    const preserveSelection = e.nativeEvent.shiftKey || multiSelectMode
+    // ONLY shift-click preserves the selection. Previously multi-select mode
+    // also preserved, but that trapped users who couldn't find the deselect
+    // path; "tap empty ground to clear" is a more universal rule.
+    const preserveSelection = e.nativeEvent.shiftKey
     if (!preserveSelection) {
       if (selectedEntityIds.length > 0) {
         useGarden.getState().clearSelection()

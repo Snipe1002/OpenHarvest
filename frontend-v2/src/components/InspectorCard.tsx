@@ -15,6 +15,7 @@
  * PATCH, revert on error with toast.
  */
 import { useEffect, useState } from 'react'
+import * as THREE from 'three'
 import { Html } from '@react-three/drei'
 import { ApiError, createEntity, deleteEntity, updateEntity } from '../api/client'
 import type {
@@ -26,6 +27,38 @@ import type {
 } from '../api/types'
 import { useGarden } from '../store/garden'
 import { formatLength, parseLength, type Units } from '../store/unitsHelpers'
+
+/**
+ * drei `<Html>` `calculatePosition` override. Replicates the default
+ * world→screen projection but clamps the result to viewport with a margin
+ * so the pill never disappears off-screen when the entity is near (or past)
+ * the visible frustum edge. Reusing a Vector3 across calls avoids per-frame
+ * allocations.
+ */
+const HTML_VIEWPORT_MARGIN_PX = 16
+const HTML_PILL_HALF_W_PX = 160
+const HTML_PILL_HALF_H_PX = 60
+const _projVec = new THREE.Vector3()
+function CLAMPED_HTML_POSITION(
+  el: THREE.Object3D,
+  camera: THREE.Camera,
+  size: { width: number; height: number },
+): [number, number] {
+  el.getWorldPosition(_projVec)
+  _projVec.project(camera)
+  const widthHalf = size.width / 2
+  const heightHalf = size.height / 2
+  const rawX = _projVec.x * widthHalf + widthHalf
+  const rawY = -(_projVec.y * heightHalf) + heightHalf
+  const minX = HTML_VIEWPORT_MARGIN_PX + HTML_PILL_HALF_W_PX
+  const maxX = size.width - HTML_VIEWPORT_MARGIN_PX - HTML_PILL_HALF_W_PX
+  const minY = HTML_VIEWPORT_MARGIN_PX + HTML_PILL_HALF_H_PX
+  const maxY = size.height - HTML_VIEWPORT_MARGIN_PX - HTML_PILL_HALF_H_PX
+  return [
+    Math.max(minX, Math.min(maxX, rawX)),
+    Math.max(minY, Math.min(maxY, rawY)),
+  ]
+}
 
 const PILL_STYLE: React.CSSProperties = {
   display: 'flex',
@@ -419,6 +452,13 @@ export default function InspectorCard() {
     <Html
       position={[ax, ay + yOffset, az]}
       center
+      // Clamp the projected screen position so the pill never sails off the
+      // viewport when the entity is near (or beyond) the visible frustum.
+      // Default drei behavior sets x/y wherever projection lands, including
+      // negative coords or coords past size.width/height — visually the pill
+      // disappears even though the entity is selected. Clamp keeps it pinned
+      // to the nearest viewport edge with a margin.
+      calculatePosition={CLAMPED_HTML_POSITION}
       // drei's wrapper has its own root; we keep it pointer-event-transparent
       // and rely on per-pill pointerEvents:auto so empty-space clicks fall
       // through to the canvas.
