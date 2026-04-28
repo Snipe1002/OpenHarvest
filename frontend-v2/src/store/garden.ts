@@ -216,7 +216,18 @@ export interface HousePlacementState {
 }
 
 /**
- * Drag-paint a rectangular region of beds. Lifecycle:
+ * Drag-paint a rectangular region. Two scopes share one state machine:
+ *
+ *  - `world` (m#10a behavior): drag two corners on the ground to create a grid
+ *    of top-level Bed entities at world ground.
+ *  - `fill-container`: drag two corners INSIDE a selected container's local
+ *    frame to fill it with a grid of Plant entities parented to the container.
+ *    Corners are still committed in world XZ (so the cyan rectangle outline
+ *    can render without a parent transform); local positions for the children
+ *    are computed at Apply time by subtracting `parentWorldX/Z`. Ghosts are
+ *    plants instead of beds, rendered at `surfaceY` (world Y).
+ *
+ * Lifecycle (both scopes):
  *  - awaiting-first-corner: user has armed region-paint via the toolbar but
  *    hasn't yet pressed on the ground. Pointer-down on ground begins the drag.
  *  - awaiting-second-corner: user is mid-drag — first corner is committed and
@@ -226,14 +237,36 @@ export interface HousePlacementState {
  *
  * Coordinates are world-space XZ in meters, snapped per the active snap chip
  * at the moment they're committed (pointer-down for the first corner;
- * pointer-up for the second). Ghost bed positions are computed from the
- * snapped corners and the chosen grid params; they do NOT re-snap.
+ * pointer-up for the second). Ghost positions are computed from the snapped
+ * corners and the chosen grid params; they do NOT re-snap.
+ *
+ * Why store world coords + parent offsets instead of local coords directly:
+ * the cyan outline renders at the App level (sibling of all entities), not
+ * inside the parent's `<group>`. World coords let the outline draw with no
+ * extra transform, and the world→local conversion happens once at Apply.
  */
+export type RegionScope =
+  | { kind: 'world' }
+  | {
+      kind: 'fill-container'
+      parentId: Guid
+      /** Display name of the parent at arming time, for the status pill copy. */
+      parentLabel: string
+      /** Y-offset (world meters) of the parent's top surface — children land here. */
+      surfaceY: number
+      /** Parent's world position at arming time. Snapshotted so we don't
+       *  re-read entity state on every pointer move. v0 ignores parent
+       *  rotation, so a simple subtraction yields local coords. */
+      parentWorldX: number
+      parentWorldZ: number
+    }
 export interface RegionPaintAwaitingFirstCorner {
   phase: 'awaiting-first-corner'
+  scope: RegionScope
 }
 export interface RegionPaintAwaitingSecondCorner {
   phase: 'awaiting-second-corner'
+  scope: RegionScope
   /** Snapped first corner in world XZ (meters). */
   firstCorner: [number, number]
   /** Live, snapped second corner; updates on pointer-move. */
@@ -242,13 +275,15 @@ export interface RegionPaintAwaitingSecondCorner {
 export type RegionBedSize = 'auto' | { x: number; y: number; z: number }
 export interface RegionPaintConfiguring {
   phase: 'configuring'
+  scope: RegionScope
   firstCorner: [number, number]
   secondCorner: [number, number]
   rows: number
   cols: number
-  /** Gap between adjacent ghost beds, meters. */
+  /** Gap between adjacent ghost cells, meters. */
   spacingM: number
-  /** Either 'auto' (cell-fits) or an explicit Box size in meters. */
+  /** Either 'auto' (cell-fits) or an explicit Box size in meters. Only
+   *  consumed by world scope; fill-container always uses a fixed plant size. */
   bedSize: RegionBedSize
 }
 export type RegionPaintState =

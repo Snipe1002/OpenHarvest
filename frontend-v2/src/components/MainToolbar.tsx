@@ -28,22 +28,67 @@
  */
 import { useEffect, useMemo } from 'react'
 import { listPrefabs, type PrefabCatalog, type PrefabSpec } from '../api/prefabs'
+import type { GardenEntity } from '../api/types'
 import {
   useGarden,
   type HousePlacementType,
   type PlacementType,
+  type RegionScope,
 } from '../store/garden'
 
 /**
  * Status text for the region-paint pill, mirroring `houseStatusText` for the
  * three-phase lifecycle. The configuring phase is silent here — its UI lives
  * inline at the rectangle's center via the `<RegionPaint>` 3D component.
+ *
+ * Copy switches by scope: world-mode talks about "the ground", fill-container
+ * mode names the target container so the user knows which entity will receive
+ * the grid of children.
  */
-function regionStatusText(phase: 'awaiting-first-corner' | 'awaiting-second-corner'): string {
+function regionStatusText(
+  phase: 'awaiting-first-corner' | 'awaiting-second-corner',
+  scope: RegionScope,
+): string {
+  if (scope.kind === 'fill-container') {
+    if (phase === 'awaiting-first-corner') {
+      return `Drag two corners INSIDE ${scope.parentLabel} to fill with plants (Esc to cancel)`
+    }
+    return `Release to set the second corner inside ${scope.parentLabel} (Esc to cancel)`
+  }
   if (phase === 'awaiting-first-corner') {
     return 'Drag two corners on the ground to define a region (Esc to cancel)'
   }
   return 'Release to set the second corner (Esc to cancel)'
+}
+
+/**
+ * Decide whether a parent entity is a "container" that accepts plant children.
+ * Used to flip `+ Region` into fill-container mode when exactly one such entity
+ * is selected.
+ *
+ * Two paths:
+ *   1. The entity has a prefab slug and the catalog's `accepts` list includes
+ *      `'plant'` (the explicit, data-driven path).
+ *   2. As a permissive fallback, the catalog spec's category === 'container'.
+ *
+ * Returns the matched `PrefabSpec` (with required `surface`) and the parent
+ * entity, or `null` if not a viable fill target.
+ */
+function resolveFillTarget(
+  parent: GardenEntity,
+  catalog: PrefabCatalog | null,
+): { spec: PrefabSpec; parent: GardenEntity } | null {
+  if (!catalog) return null
+  const slug = parent.geometry.prefabRef
+  if (!slug) return null
+  const spec = catalog[slug]
+  if (!spec) return null
+  // Need a top surface to plant ON; without one we can't compute Y for kids.
+  if (!spec.surface) return null
+  const acceptsPlant = spec.accepts.includes('plant')
+  const isContainer = spec.category === 'container'
+  if (!acceptsPlant && !isContainer) return null
+  return { spec, parent }
 }
 
 /**
@@ -285,7 +330,33 @@ export default function MainToolbar() {
     // too, but we clear here for symmetry with the other enter* helpers).
     setPlacement(null)
     setHousePlacement(null)
-    setRegionPaint({ phase: 'awaiting-first-corner' })
+    // Selection-driven scope decision: if EXACTLY ONE container-ish entity is
+    // selected, drag fills it with plants. Otherwise, drag paints a top-level
+    // region of beds (m#10a behavior).
+    const { selectedEntityIds, entities, prefabCatalog } = useGarden.getState()
+    let scope: RegionScope = { kind: 'world' }
+    if (selectedEntityIds.length === 1) {
+      const parent = entities[selectedEntityIds[0]]
+      if (parent) {
+        const target = resolveFillTarget(parent, prefabCatalog)
+        if (target) {
+          scope = {
+            kind: 'fill-container',
+            parentId: parent.id,
+            parentLabel: target.spec.displayName,
+            // surface.y is in PARENT-LOCAL meters relative to the parent's
+            // base. The parent's transform.position.y IS the parent's base in
+            // world coords (DemoBed offsets up by h/2 inside the group, but
+            // the entity's logical base is unchanged), so world surface Y is
+            // base + surface.y.
+            surfaceY: parent.transform.position.y + (target.spec.surface?.y ?? 0),
+            parentWorldX: parent.transform.position.x,
+            parentWorldZ: parent.transform.position.z,
+          }
+        }
+      }
+    }
+    setRegionPaint({ phase: 'awaiting-first-corner', scope })
   }
 
   const gardenDisabled = (myType: PlacementType): boolean =>
@@ -325,7 +396,7 @@ export default function MainToolbar() {
           onClick={() => setRegionPaint(null)}
           title="Click to cancel"
         >
-          {regionStatusText(regionPaint.phase)}
+          {regionStatusText(regionPaint.phase, regionPaint.scope)}
         </div>
       )}
 

@@ -214,8 +214,11 @@ export default function DemoGround() {
       // still produces a sensible rectangle if the user releases without
       // moving (the configuring popover then lets them drag corners later
       // via the regular translate flow on individual beds, or cancel).
+      // Corners are stored in WORLD space regardless of scope; world→local
+      // conversion happens only at Apply time in RegionPaint.tsx.
       setRegionPaint({
         phase: 'awaiting-second-corner',
+        scope: regionPaint.scope,
         firstCorner: [sx, sz],
         secondCorner: [sx, sz],
       })
@@ -229,6 +232,7 @@ export default function DemoGround() {
     const [sx, sz] = snapXZ(e.point.x, e.point.z, snap)
     setRegionPaint({
       phase: 'awaiting-second-corner',
+      scope: regionPaint.scope,
       firstCorner: regionPaint.firstCorner,
       secondCorner: [sx, sz],
     })
@@ -245,13 +249,18 @@ export default function DemoGround() {
     if (regionPaint.phase !== 'awaiting-second-corner') return
     e.stopPropagation()
     const [sx, sz] = snapXZ(e.point.x, e.point.z, snap)
+    // Defaults differ slightly by scope: world mode keeps the original 2×4
+    // bed grid; fill-container mode picks a denser 3×3 with tighter spacing
+    // since plants are smaller and a single bed rarely fits 4 columns.
+    const isFill = regionPaint.scope.kind === 'fill-container'
     setRegionPaint({
       phase: 'configuring',
+      scope: regionPaint.scope,
       firstCorner: regionPaint.firstCorner,
       secondCorner: [sx, sz],
-      rows: 2,
-      cols: 4,
-      spacingM: 0.3,
+      rows: isFill ? 3 : 2,
+      cols: isFill ? 3 : 4,
+      spacingM: isFill ? 0.15 : 0.3,
       bedSize: 'auto',
     })
   }

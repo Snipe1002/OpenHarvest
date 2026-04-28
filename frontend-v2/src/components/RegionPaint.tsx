@@ -1,5 +1,5 @@
 /**
- * RegionPaint — visual + control surface for drag-paint-region-of-beds mode.
+ * RegionPaint — visual + control surface for drag-paint-region mode.
  *
  * Coexists with DemoGround.tsx, which owns the pointer-down/move/up pipeline
  * on the ground mesh. This component is a pure read-of-store visualizer +
@@ -8,39 +8,73 @@
  *   1. awaiting-first-corner: nothing rendered (the toolbar pill alone tells
  *      the user what to do).
  *   2. awaiting-second-corner: cyan rectangle outline tracks the live drag.
- *   3. configuring: same outline + ghost beds laid out in the rows×cols grid
- *      + an HTML popover anchored at the rectangle's center for tweaking the
- *      grid params and applying / cancelling.
+ *   3. configuring: same outline + ghost children laid out in the rows×cols
+ *      grid + an HTML popover anchored at the rectangle's center for tweaking
+ *      the grid params and applying / cancelling.
+ *
+ * Two scopes share this code path (see `RegionScope` in store/garden.ts):
+ *   - `world`: ghosts are translucent BEDS at world ground (original m#10a).
+ *   - `fill-container`: ghosts are translucent PLANTS rendered at the parent's
+ *     top surface Y. Apply commits Plant entities parented to the container,
+ *     with local-space positions (world XZ minus parent world XZ).
  *
  * Position math (rectangle from snapped corners, internal cell layout):
- *   x0..x1 / z0..z1 = sorted corners
+ *   x0..x1 / z0..z1 = sorted corners (world XZ in both scopes)
  *   usableW = (x1-x0) - spacing*(cols-1)   →  per-cell width
  *   usableL = (z1-z0) - spacing*(rows-1)   →  per-cell length
  *   centerX(c) = x0 + cellW/2 + c*(cellW + spacing)
  *   centerZ(r) = z0 + cellL/2 + r*(cellL + spacing)
  *
- * Apply: parallel POSTs (one per ghost bed). Successes are inserted
- * optimistically and the new ids replace the selection so the user can
- * immediately group-translate. Failures don't roll back successes; we toast
- * the failure count.
+ * Why corners stay in WORLD coords even in fill-container scope: the cyan
+ * outline is mounted at the top of the R3F tree (sibling of all entities), so
+ * world coords let it draw without re-implementing the parent transform. The
+ * world→local conversion happens once at Apply time per child.
+ *
+ * v0 limitation: parent rotation is IGNORED. Children's local positions are
+ * computed by simple subtraction `(worldX - parentWorldX, 0, worldZ - parentWorldZ)`,
+ * which is only correct for axis-aligned parents. This matches DemoGround.tsx's
+ * single-click placement convention and is acceptable for the v0 fill mode.
+ *
+ * Apply: parallel POSTs (one per ghost). Successes are inserted optimistically
+ * and the new ids replace the selection so the user can immediately
+ * group-translate. Failures don't roll back successes; we toast the failure
+ * count.
  *
  * Sticky-aware re-entry: when stickyPlacement is true, Apply re-arms the
- * pipeline at `awaiting-first-corner` so the user can paint another region
- * without re-tapping the toolbar. Esc still cancels.
+ * pipeline at `awaiting-first-corner` carrying the SAME scope so a fill-mode
+ * paint stays in fill mode. Esc still cancels.
+ *
+ * Edge cases:
+ *   - Parent entity is removed mid-paint (e.g. another agent deletes it via
+ *     SignalR): we abort with a toast and clear regionPaint.
+ *   - Selection changes mid-paint while in fill scope: we abort with a toast.
+ *     The user can re-select and re-arm. (Multi-select is allowed to remain
+ *     after Apply because the new children are auto-selected — see Apply.)
  */
 import { useEffect, useMemo, useState } from 'react'
 import { Html, Line } from '@react-three/drei'
 import { ApiError, createEntity } from '../api/client'
 import type { CreateEntityRequest, GardenEntity, Vector3 } from '../api/types'
-import { useGarden, type RegionBedSize, type RegionPaintConfiguring } from '../store/garden'
+import {
+  useGarden,
+  type RegionBedSize,
+  type RegionPaintConfiguring,
+  type RegionScope,
+} from '../store/garden'
 import { formatLength, parseLength, type Units } from '../store/unitsHelpers'
 
 const RECT_COLOR = '#4ec9ff'
 const RECT_LINE_WIDTH = 2
 const RECT_Y = 0.02 // a hair above the ground plane to avoid z-fight
+const RECT_FILL_LIFT = 0.005 // lift outline a hair above parent surface in fill mode
 const GHOST_COLOR = '#6b4423' // wood, matches DemoBed plank color
+const GHOST_PLANT_COLOR = '#4a8a3a' // matches DemoPlant stem
 const GHOST_OPACITY = 0.3
 const GHOST_DEFAULT_HEIGHT = 0.4 // matches default bed height
+// Ghost plant geometry — mirrors DemoGround.tsx's defaultPlantGeometry so the
+// preview matches what Apply will actually create.
+const GHOST_PLANT_RADIUS = 0.04
+const GHOST_PLANT_HEIGHT = 0.4
 const POPOVER_Y = 0.3 // float popover above the ground
 const MIN_CELL = 0.05 // refuse to render ghost cells smaller than 5cm — they'd be unusable
 
@@ -215,14 +249,15 @@ function computeLayout(state: RegionPaintConfiguring): CellLayout {
 }
 
 /** Outline points for a rectangle in XZ — closed loop (5 vertices, last == first)
- *  so drei's <Line> draws all four edges. Y is fixed at RECT_Y. */
-function rectOutlinePoints(rect: Rect): Array<[number, number, number]> {
+ *  so drei's <Line> draws all four edges. Y is `outlineY`, lifted slightly
+ *  above whichever surface (ground or parent top) the rectangle is anchored to. */
+function rectOutlinePoints(rect: Rect, outlineY: number): Array<[number, number, number]> {
   return [
-    [rect.x0, RECT_Y, rect.z0],
-    [rect.x1, RECT_Y, rect.z0],
-    [rect.x1, RECT_Y, rect.z1],
-    [rect.x0, RECT_Y, rect.z1],
-    [rect.x0, RECT_Y, rect.z0],
+    [rect.x0, outlineY, rect.z0],
+    [rect.x1, outlineY, rect.z0],
+    [rect.x1, outlineY, rect.z1],
+    [rect.x0, outlineY, rect.z1],
+    [rect.x0, outlineY, rect.z0],
   ]
 }
 
@@ -332,6 +367,36 @@ function GhostBed({
   )
 }
 
+/**
+ * Single ghost plant — translucent green cylinder matching the DemoPlant stem.
+ * `position.y` is the world-space base of the cylinder (i.e. the parent's top
+ * surface Y). The cylinder is centered at y = base + height/2 so it stands ON
+ * the surface rather than sinking into it. We render this directly in world
+ * coords (sibling of the rectangle outline) instead of inside the parent's
+ * `<group>` because RegionPaint mounts at the App level, not inside the entity
+ * tree — re-parenting the whole component would require deeper refactoring
+ * and the visual result is identical at v0 (parent rotation is ignored).
+ */
+function GhostPlant({
+  position,
+}: {
+  position: { x: number; y: number; z: number }
+}) {
+  const r = GHOST_PLANT_RADIUS
+  const h = GHOST_PLANT_HEIGHT
+  return (
+    <mesh position={[position.x, position.y + h / 2, position.z]}>
+      <cylinderGeometry args={[r, r, h, 8]} />
+      <meshStandardMaterial
+        color={GHOST_PLANT_COLOR}
+        transparent
+        opacity={GHOST_OPACITY}
+        depthWrite={false}
+      />
+    </mesh>
+  )
+}
+
 export default function RegionPaint() {
   const regionPaint = useGarden((s) => s.regionPaint)
   const setRegionPaint = useGarden((s) => s.setRegionPaint)
@@ -340,7 +405,38 @@ export default function RegionPaint() {
   const addOrUpdateEntity = useGarden((s) => s.addOrUpdateEntity)
   const selectEntities = useGarden((s) => s.selectEntities)
   const setToast = useGarden((s) => s.setToast)
+  // Subscribed for the edge-case watcher below — when fill scope is active we
+  // need to abort if the parent disappears or the user changes selection.
+  const entities = useGarden((s) => s.entities)
+  const selectedEntityIds = useGarden((s) => s.selectedEntityIds)
   const [applying, setApplying] = useState(false)
+
+  // Edge case watcher (fill-container scope only):
+  //  - parent removed → abort + toast
+  //  - selection changed away from the parent → abort + toast
+  // Both conditions are silently ignored in world scope, where there is no
+  // parent to track. We deliberately do NOT abort on `applying` — the apply
+  // path itself drives the selection change to the new children.
+  useEffect(() => {
+    if (!regionPaint) return
+    if (regionPaint.scope.kind !== 'fill-container') return
+    if (applying) return
+    const { parentId, parentLabel } = regionPaint.scope
+    if (!entities[parentId]) {
+      setToast(`${parentLabel} was removed — region paint cancelled`)
+      setRegionPaint(null)
+      return
+    }
+    // Selection-change abort: the user must keep the parent selected through
+    // the paint. If they tap a different entity (or clear selection) we treat
+    // that as an intent change and bail.
+    const stillSelected =
+      selectedEntityIds.length === 1 && selectedEntityIds[0] === parentId
+    if (!stillSelected) {
+      setToast(`Selection changed — region paint cancelled`)
+      setRegionPaint(null)
+    }
+  }, [regionPaint, entities, selectedEntityIds, applying, setRegionPaint, setToast])
 
   // Hooks must run unconditionally — derive layout / rect even when phase ≠
   // configuring (we just don't render the popover or ghosts in those cases).
@@ -370,22 +466,69 @@ export default function RegionPaint() {
     if (!isConfiguring || !layout || !currentGardenId) return
     if (layout.degenerate || layout.centers.length === 0) return
     setApplying(true)
-    const size: Vector3 = {
-      x: Math.max(layout.cellSize.x, 0.01),
-      y: Math.max(layout.cellSize.y, 0.01),
-      z: Math.max(layout.cellSize.z, 0.01),
+    const scope: RegionScope = regionPaint.scope
+    let bodies: CreateEntityRequest[]
+    let childNoun: string
+    if (scope.kind === 'fill-container') {
+      // Fill mode: emit Plant entities parented to the container, with local
+      // positions (world XZ minus parent world XZ). Y is the parent's top
+      // surface in the parent's LOCAL frame — we recompute it from the
+      // entity's current position in case the parent moved between arming
+      // and Apply (snapshotted parentWorldX/Z is safe to keep using as long
+      // as the parent didn't rotate; v0 ignores rotation).
+      const parent = useGarden.getState().entities[scope.parentId]
+      if (!parent) {
+        setToast('Parent was removed — region paint cancelled')
+        setApplying(false)
+        setRegionPaint(null)
+        return
+      }
+      // Re-derive local surface Y from the catalog spec to stay correct if the
+      // parent's vertical position changed since arming.
+      const catalog = useGarden.getState().prefabCatalog
+      const slug = parent.geometry.prefabRef
+      const spec = slug && catalog ? catalog[slug] : null
+      const localSurfaceY = spec?.surface?.y ?? 0
+      bodies = layout.centers.map((c) => ({
+        kind: 'Plant',
+        name: 'Plant',
+        parentId: scope.parentId,
+        transform: {
+          position: {
+            x: c.x - scope.parentWorldX,
+            y: localSurfaceY,
+            z: c.z - scope.parentWorldZ,
+          },
+          rotation: { x: 0, y: 0, z: 0, w: 1 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+        geometry: {
+          kind: 'Cylinder',
+          radius: GHOST_PLANT_RADIUS,
+          height: GHOST_PLANT_HEIGHT,
+        },
+        tags: [],
+      }))
+      childNoun = 'plant'
+    } else {
+      const size: Vector3 = {
+        x: Math.max(layout.cellSize.x, 0.01),
+        y: Math.max(layout.cellSize.y, 0.01),
+        z: Math.max(layout.cellSize.z, 0.01),
+      }
+      bodies = layout.centers.map((c) => ({
+        kind: 'Bed',
+        name: 'Bed',
+        transform: {
+          position: { x: c.x, y: 0, z: c.z },
+          rotation: { x: 0, y: 0, z: 0, w: 1 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+        geometry: { kind: 'Box', size },
+        tags: [],
+      }))
+      childNoun = 'bed'
     }
-    const bodies: CreateEntityRequest[] = layout.centers.map((c) => ({
-      kind: 'Bed',
-      name: 'Bed',
-      transform: {
-        position: { x: c.x, y: 0, z: c.z },
-        rotation: { x: 0, y: 0, z: 0, w: 1 },
-        scale: { x: 1, y: 1, z: 1 },
-      },
-      geometry: { kind: 'Box', size },
-      tags: [],
-    }))
     // Parallel POSTs. Successful inserts are kept even if peers fail —
     // partial-success rollback wasn't asked for and would surprise the user
     // who can already see the optimistic ghosts.
@@ -412,17 +555,28 @@ export default function RegionPaint() {
       }
     }
     if (failed > 0) {
-      setToast(`Region paint: ${failed} of ${bodies.length} bed(s) failed`)
+      setToast(
+        `Region paint: ${failed} of ${bodies.length} ${childNoun}${
+          bodies.length === 1 ? '' : 's'
+        } failed`,
+      )
     }
     if (created.length > 0) {
-      // Jump selection to the new beds so the user can immediately
-      // group-translate / inspect them.
+      // Jump selection to the new children so the user can immediately
+      // group-translate / inspect them. In fill scope this also intentionally
+      // breaks the "selection must be the parent" invariant the edge-case
+      // watcher uses, but applying is finished by then so the watcher won't
+      // re-fire with a stale scope.
       selectEntities(created.map((c) => c.id))
     }
     setApplying(false)
     if (stickyPlacement) {
-      // Sticky: re-arm so the user can paint another region.
-      setRegionPaint({ phase: 'awaiting-first-corner' })
+      // Sticky: re-arm so the user can paint another region. Carry the SAME
+      // scope through — a fill-mode paint that "stuck" should keep filling
+      // the same container, not flip back to world mode (the children we
+      // just created replaced the selection, so re-deriving scope from the
+      // current selection would not pick up the original parent).
+      setRegionPaint({ phase: 'awaiting-first-corner', scope })
     } else {
       setRegionPaint(null)
     }
@@ -430,23 +584,39 @@ export default function RegionPaint() {
 
   const cancel = () => setRegionPaint(null)
 
-  const outlinePoints = rectOutlinePoints(rect)
+  // In fill-container scope the rectangle visually rides the parent's top
+  // surface (e.g. on top of a raised bed) instead of the ground plane.
+  // Capture the narrowed scope once so downstream JSX doesn't need to
+  // re-discriminate the union for TypeScript.
+  const fillScope =
+    regionPaint.scope.kind === 'fill-container' ? regionPaint.scope : null
+  const outlineY = fillScope ? fillScope.surfaceY + RECT_FILL_LIFT : RECT_Y
+  const outlinePoints = rectOutlinePoints(rect, outlineY)
 
   // Popover anchor — center of the rectangle in world space, lifted slightly
-  // so the HTML floats above the ground plane and the ghost geometry. drei's
-  // <Html> tracks this in screen space as the camera moves.
+  // so the HTML floats above the relevant surface and the ghost geometry.
+  // drei's <Html> tracks this in screen space as the camera moves.
   const anchor: [number, number, number] = [
     (rect.x0 + rect.x1) / 2,
-    POPOVER_Y,
+    fillScope ? fillScope.surfaceY + POPOVER_Y : POPOVER_Y,
     (rect.z0 + rect.z1) / 2,
   ]
 
-  const bedCount = isConfiguring && layout && !layout.degenerate ? layout.centers.length : 0
+  const childCount =
+    isConfiguring && layout && !layout.degenerate ? layout.centers.length : 0
+  const childNoun = fillScope ? 'plant' : 'bed'
 
   return (
     <>
       <Line points={outlinePoints} color={RECT_COLOR} lineWidth={RECT_LINE_WIDTH} />
-      {isConfiguring && layout && !layout.degenerate &&
+      {isConfiguring && layout && !layout.degenerate && fillScope &&
+        layout.centers.map((c, i) => (
+          <GhostPlant
+            key={i}
+            position={{ x: c.x, y: fillScope.surfaceY, z: c.z }}
+          />
+        ))}
+      {isConfiguring && layout && !layout.degenerate && !fillScope &&
         layout.centers.map((c, i) => (
           <GhostBed key={i} position={c} size={layout.cellSize} />
         ))}
@@ -487,73 +657,80 @@ export default function RegionPaint() {
                 onCommit={(m) => updateConfig({ spacingM: m })}
               />
             </div>
-            <div style={ROW_STYLE}>
-              <span style={LABEL_STYLE}>Size</span>
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
-                <input
-                  type="radio"
-                  checked={regionPaint.bedSize === 'auto'}
-                  onChange={() => updateConfig({ bedSize: 'auto' })}
-                />
-                auto
-              </label>
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
-                <input
-                  type="radio"
-                  checked={regionPaint.bedSize !== 'auto'}
-                  onChange={() => {
-                    // Default explicit size matches the standard 4'×2' raised bed:
-                    // 1.22m × 0.4m × 0.61m (W × H × L).
-                    const seed: RegionBedSize =
-                      regionPaint.bedSize === 'auto'
-                        ? { x: 1.22, y: 0.4, z: 0.61 }
-                        : regionPaint.bedSize
-                    updateConfig({ bedSize: seed })
-                  }}
-                />
-                fixed
-              </label>
-            </div>
-            {regionPaint.bedSize !== 'auto' && (
-              <div style={ROW_STYLE}>
-                <span style={LABEL_STYLE}>W H L</span>
-                <LengthInput
-                  meters={regionPaint.bedSize.x}
-                  min={0.01}
-                  onCommit={(m) =>
-                    updateConfig({
-                      bedSize:
-                        regionPaint.bedSize !== 'auto'
-                          ? { ...regionPaint.bedSize, x: m }
-                          : { x: m, y: 0.4, z: 0.61 },
-                    })
-                  }
-                />
-                <LengthInput
-                  meters={regionPaint.bedSize.y}
-                  min={0.01}
-                  onCommit={(m) =>
-                    updateConfig({
-                      bedSize:
-                        regionPaint.bedSize !== 'auto'
-                          ? { ...regionPaint.bedSize, y: m }
-                          : { x: 1.22, y: m, z: 0.61 },
-                    })
-                  }
-                />
-                <LengthInput
-                  meters={regionPaint.bedSize.z}
-                  min={0.01}
-                  onCommit={(m) =>
-                    updateConfig({
-                      bedSize:
-                        regionPaint.bedSize !== 'auto'
-                          ? { ...regionPaint.bedSize, z: m }
-                          : { x: 1.22, y: 0.4, z: m },
-                    })
-                  }
-                />
-              </div>
+            {/* Size controls only matter for world-mode bed grids — plants in
+                fill mode use a fixed default geometry, so suppressing the row
+                avoids confusing UI that would have no effect. */}
+            {!fillScope && (
+              <>
+                <div style={ROW_STYLE}>
+                  <span style={LABEL_STYLE}>Size</span>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
+                    <input
+                      type="radio"
+                      checked={regionPaint.bedSize === 'auto'}
+                      onChange={() => updateConfig({ bedSize: 'auto' })}
+                    />
+                    auto
+                  </label>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
+                    <input
+                      type="radio"
+                      checked={regionPaint.bedSize !== 'auto'}
+                      onChange={() => {
+                        // Default explicit size matches the standard 4'×2' raised bed:
+                        // 1.22m × 0.4m × 0.61m (W × H × L).
+                        const seed: RegionBedSize =
+                          regionPaint.bedSize === 'auto'
+                            ? { x: 1.22, y: 0.4, z: 0.61 }
+                            : regionPaint.bedSize
+                        updateConfig({ bedSize: seed })
+                      }}
+                    />
+                    fixed
+                  </label>
+                </div>
+                {regionPaint.bedSize !== 'auto' && (
+                  <div style={ROW_STYLE}>
+                    <span style={LABEL_STYLE}>W H L</span>
+                    <LengthInput
+                      meters={regionPaint.bedSize.x}
+                      min={0.01}
+                      onCommit={(m) =>
+                        updateConfig({
+                          bedSize:
+                            regionPaint.bedSize !== 'auto'
+                              ? { ...regionPaint.bedSize, x: m }
+                              : { x: m, y: 0.4, z: 0.61 },
+                        })
+                      }
+                    />
+                    <LengthInput
+                      meters={regionPaint.bedSize.y}
+                      min={0.01}
+                      onCommit={(m) =>
+                        updateConfig({
+                          bedSize:
+                            regionPaint.bedSize !== 'auto'
+                              ? { ...regionPaint.bedSize, y: m }
+                              : { x: 1.22, y: m, z: 0.61 },
+                        })
+                      }
+                    />
+                    <LengthInput
+                      meters={regionPaint.bedSize.z}
+                      min={0.01}
+                      onCommit={(m) =>
+                        updateConfig({
+                          bedSize:
+                            regionPaint.bedSize !== 'auto'
+                              ? { ...regionPaint.bedSize, z: m }
+                              : { x: 1.22, y: 0.4, z: m },
+                        })
+                      }
+                    />
+                  </div>
+                )}
+              </>
             )}
             {layout?.degenerate && (
               <div style={{ color: '#ffaa44', fontSize: 11 }}>
@@ -563,12 +740,14 @@ export default function RegionPaint() {
             <div style={ROW_STYLE}>
               <button
                 style={
-                  applying || bedCount === 0 ? APPLY_BUTTON_DISABLED : APPLY_BUTTON
+                  applying || childCount === 0 ? APPLY_BUTTON_DISABLED : APPLY_BUTTON
                 }
-                disabled={applying || bedCount === 0}
+                disabled={applying || childCount === 0}
                 onClick={apply}
               >
-                {applying ? 'Applying…' : `Apply ${bedCount} bed${bedCount === 1 ? '' : 's'}`}
+                {applying
+                  ? 'Applying…'
+                  : `Apply ${childCount} ${childNoun}${childCount === 1 ? '' : 's'}`}
               </button>
               <button style={CANCEL_BUTTON} onClick={cancel} disabled={applying}>
                 Cancel
