@@ -438,6 +438,44 @@ export default function MultiSelectInspector() {
     getSelectedIds: () => useGarden.getState().selectedEntityIds,
   })
 
+  // -------------------------------------------------------------------------
+  // Arrange-wizard defaults — MUST live above the early return so the hook
+  // count stays stable across selection-count transitions (going from 1 to 2
+  // primaries previously crashed the whole tree with a hooks-order error).
+  // The body returns sane fallbacks when the selection is empty or singular
+  // so the wizard input placeholders are still computable on the very first
+  // render after the panel opens.
+  // -------------------------------------------------------------------------
+  const arrangeDefaults = useMemo(() => {
+    const snap = useGarden.getState().snap ?? 0.5
+    const n = selected.length
+    if (n === 0) return { cols: 1, gap: snap, radius: snap * 2 }
+    const cols = Math.max(1, Math.round(Math.sqrt(n)))
+    let minX = Infinity,
+      maxX = -Infinity,
+      minZ = Infinity,
+      maxZ = -Infinity
+    for (const e of selected) {
+      const { x, z } = e.transform.position
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (z < minZ) minZ = z
+      if (z > maxZ) maxZ = z
+    }
+    const extent = Math.max(maxX - minX, maxZ - minZ, snap * 2)
+    return { cols, gap: snap, radius: Math.max(extent / 2, snap * 2) }
+  }, [selected])
+
+  // Seed arrange-panel inputs when the panel opens. Also above the early
+  // return for the same hook-stability reason as arrangeDefaults.
+  useEffect(() => {
+    if (!arrangeOpen) return
+    setColsDraft(String(arrangeDefaults.cols))
+    setGapXDraft(formatLength(arrangeDefaults.gap, units))
+    setGapZDraft(formatLength(arrangeDefaults.gap, units))
+    setRadiusDraft(formatLength(arrangeDefaults.radius, units))
+  }, [arrangeOpen, arrangeDefaults, units])
+
   if (selected.length < 2 || !gardenId) return null
 
   const centroid = centroidOf(selected)
@@ -681,37 +719,10 @@ export default function MultiSelectInspector() {
   //
   // We compute a sensible default for each unspecified input on first open
   // (cols ≈ √N, gap = active snap or 0.5m, radius = current max in-plane
-  // extent / 2) so a user can hit Apply without filling anything in.
+  // extent / 2) so a user can hit Apply without filling anything in. The
+  // useMemo / seed-useEffect that drive these defaults moved above the
+  // early return — see notes there.
   // -------------------------------------------------------------------------
-  const arrangeDefaults = useMemo(() => {
-    const n = selected.length
-    const cols = Math.max(1, Math.round(Math.sqrt(n)))
-    const snap = useGarden.getState().snap ?? 0.5
-    let minX = Infinity,
-      maxX = -Infinity,
-      minZ = Infinity,
-      maxZ = -Infinity
-    for (const e of selected) {
-      const { x, z } = e.transform.position
-      if (x < minX) minX = x
-      if (x > maxX) maxX = x
-      if (z < minZ) minZ = z
-      if (z > maxZ) maxZ = z
-    }
-    const extent = Math.max(maxX - minX, maxZ - minZ, snap * 2)
-    return { cols, gap: snap, radius: Math.max(extent / 2, snap * 2) }
-  }, [selected])
-
-  // When the panel opens (or selection changes while open), seed the drafts
-  // with the computed defaults — user can still override before Apply.
-  useEffect(() => {
-    if (!arrangeOpen) return
-    setColsDraft(String(arrangeDefaults.cols))
-    setGapXDraft(formatLength(arrangeDefaults.gap, units))
-    setGapZDraft(formatLength(arrangeDefaults.gap, units))
-    setRadiusDraft(formatLength(arrangeDefaults.radius, units))
-  }, [arrangeOpen, arrangeDefaults, units])
-
   const onArrangeGrid = async (
     cols: number,
     gapX: number,
