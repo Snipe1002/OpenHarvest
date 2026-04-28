@@ -64,7 +64,7 @@ import * as THREE from 'three'
 import { ApiError, createEntity, deleteEntity, updateEntity } from '../api/client'
 import type { CreateEntityRequest, GardenEntity, Quaternion } from '../api/types'
 import { useGarden } from '../store/garden'
-import { formatLength } from '../store/unitsHelpers'
+import { formatLength, parseLength } from '../store/unitsHelpers'
 import { useButtonDragHandle } from './useButtonDragHandle'
 
 const PILL_STYLE: React.CSSProperties = {
@@ -172,6 +172,95 @@ const DISABLED_BUTTON: React.CSSProperties = {
   ...ICON_BUTTON,
   opacity: 0.4,
   cursor: 'not-allowed',
+}
+
+const ARRANGE_PANEL_STYLE: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  padding: '8px 10px',
+  background: 'rgba(20, 22, 24, 0.94)',
+  border: '1px solid #4ec9ff',
+  borderRadius: 8,
+  fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+  fontSize: 11,
+  color: '#e5e5e5',
+  pointerEvents: 'auto',
+  minWidth: 260,
+}
+
+const TAB_ROW_STYLE: React.CSSProperties = {
+  display: 'flex',
+  gap: 4,
+}
+
+const TAB_BTN: React.CSSProperties = {
+  flex: 1,
+  background: '#2a2d31',
+  color: '#aaa',
+  border: '1px solid #444',
+  borderRadius: 6,
+  padding: '4px 6px',
+  fontSize: 11,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+}
+
+const TAB_BTN_ACTIVE: React.CSSProperties = {
+  ...TAB_BTN,
+  background: 'rgba(60, 130, 200, 0.85)',
+  borderColor: '#4a90c8',
+  color: '#fff',
+}
+
+const FIELD_ROW: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+}
+
+const FIELD_LABEL: React.CSSProperties = {
+  width: 64,
+  color: '#888',
+  fontSize: 10,
+  textTransform: 'uppercase',
+  letterSpacing: 0.3,
+}
+
+const FIELD_INPUT: React.CSSProperties = {
+  flex: 1,
+  background: '#0e1012',
+  color: '#e5e5e5',
+  border: '1px solid #333',
+  borderRadius: 4,
+  padding: '3px 6px',
+  fontSize: 12,
+  fontFamily: 'inherit',
+}
+
+const APPLY_BTN: React.CSSProperties = {
+  flex: 1,
+  background: 'rgba(60, 130, 200, 0.85)',
+  color: '#fff',
+  border: '1px solid #4a90c8',
+  borderRadius: 6,
+  padding: '6px 10px',
+  fontSize: 12,
+  fontWeight: 600,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+}
+
+const CANCEL_BTN: React.CSSProperties = {
+  flex: 1,
+  background: '#2a2d31',
+  color: '#bbb',
+  border: '1px solid #444',
+  borderRadius: 6,
+  padding: '6px 10px',
+  fontSize: 12,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
 }
 
 const HEADER_STYLE: React.CSSProperties = {
@@ -306,10 +395,20 @@ export default function MultiSelectInspector() {
 
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [arrangeOpen, setArrangeOpen] = useState(false)
+  const [arrangeMode, setArrangeMode] = useState<'grid' | 'ring'>('grid')
+  // Grid inputs are draft strings (so the user can type "5'0\"" or "1.5") and
+  // only get parsed on Apply. cols is a separate integer draft.
+  const [colsDraft, setColsDraft] = useState('')
+  const [gapXDraft, setGapXDraft] = useState('')
+  const [gapZDraft, setGapZDraft] = useState('')
+  const [radiusDraft, setRadiusDraft] = useState('')
+  const [startAngleDraft, setStartAngleDraft] = useState('0')
 
   // Reset transient UI state when the selection changes.
   useEffect(() => {
     setConfirmingDelete(false)
+    setArrangeOpen(false)
   }, [selectedIds])
 
   // Esc cancels group-translate mode. Selection is left intact (Esc clearing
@@ -571,6 +670,125 @@ export default function MultiSelectInspector() {
     await onDistribute(axis)
   }
 
+  // -------------------------------------------------------------------------
+  // Arrange — cartesian grid + polar ring layout helpers.
+  //
+  // Both place primaries in *selection order* (the order they were tapped),
+  // anchored at the current group centroid so opening the wizard never
+  // teleports the cluster across the scene. Y is preserved per-entity so
+  // beds on a sloped surface or plants at varying heights don't collapse to
+  // a single plane.
+  //
+  // We compute a sensible default for each unspecified input on first open
+  // (cols ≈ √N, gap = active snap or 0.5m, radius = current max in-plane
+  // extent / 2) so a user can hit Apply without filling anything in.
+  // -------------------------------------------------------------------------
+  const arrangeDefaults = useMemo(() => {
+    const n = selected.length
+    const cols = Math.max(1, Math.round(Math.sqrt(n)))
+    const snap = useGarden.getState().snap ?? 0.5
+    let minX = Infinity,
+      maxX = -Infinity,
+      minZ = Infinity,
+      maxZ = -Infinity
+    for (const e of selected) {
+      const { x, z } = e.transform.position
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (z < minZ) minZ = z
+      if (z > maxZ) maxZ = z
+    }
+    const extent = Math.max(maxX - minX, maxZ - minZ, snap * 2)
+    return { cols, gap: snap, radius: Math.max(extent / 2, snap * 2) }
+  }, [selected])
+
+  // When the panel opens (or selection changes while open), seed the drafts
+  // with the computed defaults — user can still override before Apply.
+  useEffect(() => {
+    if (!arrangeOpen) return
+    setColsDraft(String(arrangeDefaults.cols))
+    setGapXDraft(formatLength(arrangeDefaults.gap, units))
+    setGapZDraft(formatLength(arrangeDefaults.gap, units))
+    setRadiusDraft(formatLength(arrangeDefaults.radius, units))
+  }, [arrangeOpen, arrangeDefaults, units])
+
+  const onArrangeGrid = async (
+    cols: number,
+    gapX: number,
+    gapZ: number,
+  ): Promise<MassOpResult> => {
+    const n = selected.length
+    const totalCols = Math.max(1, Math.min(cols, n))
+    const totalRows = Math.ceil(n / totalCols)
+    const gridWidth = (totalCols - 1) * gapX
+    const gridHeight = (totalRows - 1) * gapZ
+    const x0 = centroid.x - gridWidth / 2
+    const z0 = centroid.z - gridHeight / 2
+    const next: GardenEntity[] = selected.map((e, i) => {
+      const col = i % totalCols
+      const row = Math.floor(i / totalCols)
+      return {
+        ...e,
+        transform: {
+          ...e.transform,
+          position: {
+            x: x0 + col * gapX,
+            y: e.transform.position.y,
+            z: z0 + row * gapZ,
+          },
+        },
+      }
+    })
+    return applyOptimisticPatch(next)
+  }
+
+  const onArrangeRing = async (
+    radius: number,
+    startAngleDeg: number,
+  ): Promise<MassOpResult> => {
+    const n = selected.length
+    const startRad = (startAngleDeg * Math.PI) / 180
+    const step = (2 * Math.PI) / n
+    const next: GardenEntity[] = selected.map((e, i) => {
+      const angle = startRad + i * step
+      return {
+        ...e,
+        transform: {
+          ...e.transform,
+          position: {
+            x: centroid.x + radius * Math.cos(angle),
+            y: e.transform.position.y,
+            z: centroid.z + radius * Math.sin(angle),
+          },
+        },
+      }
+    })
+    return applyOptimisticPatch(next)
+  }
+
+  const onArrangeApply = async () => {
+    if (arrangeMode === 'grid') {
+      const cols = parseInt(colsDraft, 10)
+      const gapX = parseLength(gapXDraft, units)
+      const gapZ = parseLength(gapZDraft, units)
+      if (!Number.isFinite(cols) || cols < 1 || gapX === null || gapZ === null) {
+        setToast('Arrange: cols, gap-x, and gap-z must all be valid')
+        return
+      }
+      const result = await onArrangeGrid(cols, gapX, gapZ)
+      if (result.ok) setArrangeOpen(false)
+      return
+    }
+    const radius = parseLength(radiusDraft, units)
+    const startDeg = Number(startAngleDraft)
+    if (radius === null || radius <= 0 || !Number.isFinite(startDeg)) {
+      setToast('Arrange: radius must be > 0 and start-angle must be a number')
+      return
+    }
+    const result = await onArrangeRing(radius, startDeg)
+    if (result.ok) setArrangeOpen(false)
+  }
+
   const canDistribute = selected.length >= 3
   // Level-sensitive ops (Distribute, Normalize, Align, Rotate) require all
   // primaries share a coordinate frame. When the selection spans multiple
@@ -606,6 +824,92 @@ export default function MultiSelectInspector() {
         </span>
       </div>
 
+      {arrangeOpen && (
+        <div style={ARRANGE_PANEL_STYLE}>
+          <div style={TAB_ROW_STYLE}>
+            <button
+              style={arrangeMode === 'grid' ? TAB_BTN_ACTIVE : TAB_BTN}
+              onClick={() => setArrangeMode('grid')}
+            >
+              Grid (cartesian)
+            </button>
+            <button
+              style={arrangeMode === 'ring' ? TAB_BTN_ACTIVE : TAB_BTN}
+              onClick={() => setArrangeMode('ring')}
+            >
+              Ring (polar)
+            </button>
+          </div>
+          {arrangeMode === 'grid' ? (
+            <>
+              <div style={FIELD_ROW}>
+                <span style={FIELD_LABEL}>Cols</span>
+                <input
+                  style={FIELD_INPUT}
+                  inputMode="numeric"
+                  value={colsDraft}
+                  onChange={(e) => setColsDraft(e.target.value)}
+                  placeholder={String(arrangeDefaults.cols)}
+                />
+                <span style={{ color: '#666', fontSize: 10, whiteSpace: 'nowrap' }}>
+                  → {Math.ceil(selected.length / Math.max(1, parseInt(colsDraft, 10) || arrangeDefaults.cols))} rows
+                </span>
+              </div>
+              <div style={FIELD_ROW}>
+                <span style={FIELD_LABEL}>Gap X</span>
+                <input
+                  style={FIELD_INPUT}
+                  value={gapXDraft}
+                  onChange={(e) => setGapXDraft(e.target.value)}
+                  placeholder={formatLength(arrangeDefaults.gap, units)}
+                />
+              </div>
+              <div style={FIELD_ROW}>
+                <span style={FIELD_LABEL}>Gap Z</span>
+                <input
+                  style={FIELD_INPUT}
+                  value={gapZDraft}
+                  onChange={(e) => setGapZDraft(e.target.value)}
+                  placeholder={formatLength(arrangeDefaults.gap, units)}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={FIELD_ROW}>
+                <span style={FIELD_LABEL}>Radius</span>
+                <input
+                  style={FIELD_INPUT}
+                  value={radiusDraft}
+                  onChange={(e) => setRadiusDraft(e.target.value)}
+                  placeholder={formatLength(arrangeDefaults.radius, units)}
+                />
+              </div>
+              <div style={FIELD_ROW}>
+                <span style={FIELD_LABEL}>Start °</span>
+                <input
+                  style={FIELD_INPUT}
+                  inputMode="decimal"
+                  value={startAngleDraft}
+                  onChange={(e) => setStartAngleDraft(e.target.value)}
+                  placeholder="0"
+                />
+                <span style={{ color: '#666', fontSize: 10, whiteSpace: 'nowrap' }}>
+                  step {(360 / Math.max(1, selected.length)).toFixed(1)}°
+                </span>
+              </div>
+            </>
+          )}
+          <div style={{ ...FIELD_ROW, marginTop: 2 }}>
+            <button style={CANCEL_BTN} onClick={() => setArrangeOpen(false)} disabled={busy}>
+              Cancel
+            </button>
+            <button style={APPLY_BTN} onClick={onArrangeApply} disabled={busy}>
+              {busy ? 'Applying…' : `Apply to ${selected.length}`}
+            </button>
+          </div>
+        </div>
+      )}
       <div style={PILL_STYLE}>
         <button
           style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
@@ -736,6 +1040,25 @@ export default function MultiSelectInspector() {
           title={levelLockedDisabled ? mixedTooltip : 'Align Bottom — maximum Z'}
         >
           ⇧
+        </button>
+        <span style={{ width: 1, alignSelf: 'stretch', background: '#444', margin: '0 2px' }} />
+        <button
+          style={
+            buttonDisabled || levelLockedDisabled
+              ? DISABLED_BUTTON
+              : arrangeOpen
+                ? ACTIVE_BUTTON
+                : ICON_BUTTON
+          }
+          onClick={() => setArrangeOpen((v) => !v)}
+          disabled={buttonDisabled || levelLockedDisabled}
+          title={
+            levelLockedDisabled
+              ? mixedTooltip
+              : 'Arrange in a grid or ring around the centroid'
+          }
+        >
+          ▤
         </button>
         <span style={{ width: 1, alignSelf: 'stretch', background: '#444', margin: '0 2px' }} />
         <button
