@@ -40,6 +40,7 @@ export default function MultiChip() {
   const setMulti = useGarden((s) => s.setMultiSelectMode)
   return (
     <button
+      data-tour-id="multi-chip"
       style={multi ? ACTIVE_STYLE : STYLE}
       onClick={() => setMulti(!multi)}
       title="When ON, every entity tap toggles its membership in the selection — multi-pick without shift. Useful on touch devices."

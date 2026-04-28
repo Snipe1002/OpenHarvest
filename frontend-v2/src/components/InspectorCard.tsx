@@ -565,7 +565,7 @@ export default function InspectorCard() {
     >
         {/* Action row: type label + (optional) parent chip + buttons */}
         <div style={PILL_STYLE}>
-          <span style={{ fontSize: 11, padding: '0 4px', color: '#bbb' }}>{typeLabel(entity)}</span>
+          <span data-tour-id="insp-type-label" style={{ fontSize: 11, padding: '0 4px', color: '#bbb' }}>{typeLabel(entity)}</span>
           {parent && (
             <span
               style={{ fontSize: 10, padding: '0 4px', color: '#888' }}
@@ -574,11 +574,12 @@ export default function InspectorCard() {
               child of {parentLabel(parent, prefabCatalog) ?? 'parent'}
             </span>
           )}
-          <button style={ICON_BUTTON} onClick={onRotate} title="Rotate 90°">
+          <button data-tour-id="insp-rotate" style={ICON_BUTTON} onClick={onRotate} title="Rotate 90°">
             <span>⟳</span>
             <span style={ICON_BUTTON_LABEL}>rotate</span>
           </button>
           <button
+            data-tour-id="insp-move"
             style={ICON_BUTTON}
             onPointerDown={buttonDrag.onPointerDown}
             title="Tap to toggle translate mode, or press and drag to move directly"
@@ -586,11 +587,12 @@ export default function InspectorCard() {
             <span>⇄</span>
             <span style={ICON_BUTTON_LABEL}>move</span>
           </button>
-          <button style={ICON_BUTTON} onClick={onDuplicate} title="Duplicate">
+          <button data-tour-id="insp-copy" style={ICON_BUTTON} onClick={onDuplicate} title="Duplicate">
             <span>📋</span>
             <span style={ICON_BUTTON_LABEL}>copy</span>
           </button>
           <button
+            data-tour-id="insp-delete"
             style={confirmingDelete ? DELETE_CONFIRM : DELETE_BUTTON}
             onClick={onDelete}
             onBlur={() => setConfirmingDelete(false)}
@@ -600,6 +602,7 @@ export default function InspectorCard() {
             <span style={ICON_BUTTON_LABEL}>{confirmingDelete ? 'confirm?' : 'delete'}</span>
           </button>
           <button
+            data-tour-id="insp-size"
             style={{ ...ICON_BUTTON, background: expanded ? '#444' : ICON_BUTTON.background }}
             onClick={() => setExpanded((v) => !v)}
             title="Edit size details"
@@ -608,6 +611,7 @@ export default function InspectorCard() {
             <span style={ICON_BUTTON_LABEL}>size</span>
           </button>
           <button
+            data-tour-id="insp-close"
             style={ICON_BUTTON}
             onClick={() => clearSelection()}
             title="Close"
@@ -626,6 +630,7 @@ export default function InspectorCard() {
             no extra mode toggle, since fine adjustment after a coarse drag
             is the most common workflow. */}
         <div
+          data-tour-id="insp-nudge-pad"
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(3, 36px)',

@@ -38,6 +38,7 @@ export default function StickyChip() {
   const setSticky = useGarden((s) => s.setStickyPlacement)
   return (
     <button
+      data-tour-id="sticky-chip"
       style={sticky ? ACTIVE_STYLE : STYLE}
       onClick={() => setSticky(!sticky)}
       title="When ON, placement stays armed after each click — keep dropping the same kind without re-tapping the toolbar"

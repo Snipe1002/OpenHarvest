@@ -22,6 +22,7 @@ import WallInspectorCard from './components/WallInspectorCard'
 import { listGardenIds } from './api/client'
 import { connect, disconnect } from './api/signalr'
 import { useGarden } from './store/garden'
+import TourSystem from './tour/TourSystem'
 
 /**
  * App root: full-viewport Pascal Viewer with our garden components mounted as
@@ -255,6 +256,7 @@ export default function App() {
       <MultiSelectInspector />
       <TranslateStatusPill />
       <ToastBar />
+      <TourSystem />
     </div>
   )
 }
