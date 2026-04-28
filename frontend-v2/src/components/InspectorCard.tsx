@@ -15,8 +15,6 @@
  * PATCH, revert on error with toast.
  */
 import { useEffect, useState } from 'react'
-import * as THREE from 'three'
-import { Html } from '@react-three/drei'
 import { ApiError, createEntity, deleteEntity, updateEntity } from '../api/client'
 import type {
   CreateEntityRequest,
@@ -29,37 +27,6 @@ import { useGarden } from '../store/garden'
 import { formatLength, parseLength, type Units } from '../store/unitsHelpers'
 import { useButtonDragHandle } from './useButtonDragHandle'
 
-/**
- * drei `<Html>` `calculatePosition` override. Replicates the default
- * world→screen projection but clamps the result to viewport with a margin
- * so the pill never disappears off-screen when the entity is near (or past)
- * the visible frustum edge. Reusing a Vector3 across calls avoids per-frame
- * allocations.
- */
-const HTML_VIEWPORT_MARGIN_PX = 16
-const HTML_PILL_HALF_W_PX = 160
-const HTML_PILL_HALF_H_PX = 60
-const _projVec = new THREE.Vector3()
-function CLAMPED_HTML_POSITION(
-  el: THREE.Object3D,
-  camera: THREE.Camera,
-  size: { width: number; height: number },
-): [number, number] {
-  el.getWorldPosition(_projVec)
-  _projVec.project(camera)
-  const widthHalf = size.width / 2
-  const heightHalf = size.height / 2
-  const rawX = _projVec.x * widthHalf + widthHalf
-  const rawY = -(_projVec.y * heightHalf) + heightHalf
-  const minX = HTML_VIEWPORT_MARGIN_PX + HTML_PILL_HALF_W_PX
-  const maxX = size.width - HTML_VIEWPORT_MARGIN_PX - HTML_PILL_HALF_W_PX
-  const minY = HTML_VIEWPORT_MARGIN_PX + HTML_PILL_HALF_H_PX
-  const maxY = size.height - HTML_VIEWPORT_MARGIN_PX - HTML_PILL_HALF_H_PX
-  return [
-    Math.max(minX, Math.min(maxX, rawX)),
-    Math.max(minY, Math.min(maxY, rawY)),
-  ]
-}
 
 const PILL_STYLE: React.CSSProperties = {
   display: 'flex',
@@ -191,14 +158,6 @@ function rotateY90(q: Quaternion): Quaternion {
   return { x, y, z, w }
 }
 
-function anchorOffsetY(entity: GardenEntity): number {
-  // Above the top of the entity's bounding box, with a small padding.
-  const size = entity.geometry.size
-  if (size) return size.y + 0.3
-  if (typeof entity.geometry.height === 'number') return entity.geometry.height + 0.3
-  return 1.5
-}
-
 interface NumberFieldProps {
   label: string
   /** Always in meters (the canonical internal unit). */
@@ -313,9 +272,6 @@ export default function InspectorCard() {
   })
 
   if (!entity || !gardenId) return null
-
-  const { x: ax, y: ay, z: az } = entity.transform.position
-  const yOffset = anchorOffsetY(entity)
 
   const patch = async (
     nextEntity: GardenEntity,
@@ -464,38 +420,30 @@ export default function InspectorCard() {
   })()
 
   return (
-    <Html
-      position={[ax, ay + yOffset, az]}
-      center
-      // Clamp the projected screen position so the pill never sails off the
-      // viewport when the entity is near (or beyond) the visible frustum.
-      // Default drei behavior sets x/y wherever projection lands, including
-      // negative coords or coords past size.width/height — visually the pill
-      // disappears even though the entity is selected. Clamp keeps it pinned
-      // to the nearest viewport edge with a margin.
-      calculatePosition={CLAMPED_HTML_POSITION}
-      // drei's wrapper has its own root; we keep it pointer-event-transparent
-      // and rely on per-pill pointerEvents:auto so empty-space clicks fall
-      // through to the canvas.
-      style={{ pointerEvents: 'none' }}
+    <div
+      // Fixed top-right corner so the pill is ALWAYS in the same place,
+      // never covers the entity, and is far from the typical drag area.
+      // Was anchored to the entity in 3D space via drei <Html>, but that
+      // (a) put the action buttons right on top of the entity and made
+      // button-drag pointless (finger still covered the object), and
+      // (b) created weird projection edge-cases when the entity went
+      // near the viewport edge. The entity's outline still indicates
+      // WHICH entity is being inspected; predictable corner location wins.
+      style={{
+        position: 'fixed',
+        top: 16,
+        right: 16,
+        zIndex: 12,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-end',
+        gap: 4,
+        pointerEvents: 'auto',
+        maxWidth: 'calc(100vw - 32px)',
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
     >
-      <div
-        // The flex column owns its own pointer-events so all descendants
-        // (pill + detail panel) reliably receive clicks. Without this, the
-        // `pointerEvents:'none'` from the parent <Html> can mask click
-        // hit-testing on touch devices in particular.
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 4,
-          pointerEvents: 'auto',
-        }}
-        // Stop pointerdown from reaching the canvas (camera orbit) AND stop
-        // click from reaching the canvas (deselect on empty-ground click).
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => e.stopPropagation()}
-      >
         {/* Action row: type label + (optional) parent chip + buttons */}
         <div style={PILL_STYLE}>
           <span style={{ fontSize: 11, padding: '0 4px', color: '#bbb' }}>{typeLabel(entity)}</span>
@@ -562,7 +510,6 @@ export default function InspectorCard() {
             )}
           </div>
         )}
-      </div>
-    </Html>
+    </div>
   )
 }

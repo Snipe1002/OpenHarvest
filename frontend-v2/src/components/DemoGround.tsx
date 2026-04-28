@@ -266,6 +266,7 @@ export default function DemoGround() {
       regionPaint,
       currentGardenId,
       snap,
+      multiSelectMode,
       prefabCatalog,
     } = state
 
@@ -389,10 +390,14 @@ export default function DemoGround() {
     }
 
     // No placement — empty ground click clears selection (entity OR wall).
-    // ONLY shift-click preserves the selection. Previously multi-select mode
-    // also preserved, but that trapped users who couldn't find the deselect
-    // path; "tap empty ground to clear" is a more universal rule.
-    const preserveSelection = e.nativeEvent.shiftKey
+    // Shift OR multi-select mode preserves the selection. Multi mode is
+    // re-included because R3F can fire the ground onClick even when the
+    // user's tap was meant for an entity (slight pointer movement, near-
+    // miss raycast); without this, multi-select past 2 was dropping the
+    // selection on every tap-on-entity. Deselect path while multi mode is
+    // on: tap the ✕ Close on the inspector, or toggle the Multi chip off
+    // and tap empty ground.
+    const preserveSelection = e.nativeEvent.shiftKey || multiSelectMode
     if (!preserveSelection) {
       if (selectedEntityIds.length > 0) {
         useGarden.getState().clearSelection()
