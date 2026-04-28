@@ -211,6 +211,12 @@ export default function App() {
             !regionDragActive &&
             !buttonDragActive
           }
+          // Clamp dolly distance so a pinch-out doesn't push the camera past
+          // the scene bounds — dramatic zoom-out caused the canvas to render
+          // blank (the entire scene shrinks past the visible / WebGPU-stable
+          // range). Sane garden scale is ~50m across at most; cap at 200m.
+          minDistance={1}
+          maxDistance={200}
         />
         {/* Captures camera/renderer/raycaster into a module-level singleton
             so `useButtonDragHandle` can raycast the finger onto the ground
