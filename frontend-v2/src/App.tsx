@@ -230,9 +230,11 @@ export default function App() {
             {renderChildren(e.id, new Set([e.id]))}
           </EntityRenderer>
         ))}
-        {/* Inspector is anchored to the selected entity in 3D space — drei's
-            Html mounts it as DOM but tracks the world position. */}
-        <InspectorCard />
+        {/* WallInspectorCard still uses drei <Html> anchored to the wall's
+            centroid in 3D space, so it stays inside <Viewer>. The
+            (regular-DOM) <InspectorCard /> moved OUTSIDE <Viewer> below —
+            mounting plain DOM as an R3F child crashes the renderer the
+            moment it returns non-null content. */}
         <WallInspectorCard />
         {/* Drag-paint region of beds — visualizes the rectangle outline,
             ghost beds during configuring, and the inline grid-tweak popover.
@@ -248,6 +250,7 @@ export default function App() {
       <StickyChip />
       <MultiChip />
       <UnitsChip />
+      <InspectorCard />
       <MainToolbar />
       <MultiSelectInspector />
       <TranslateStatusPill />
