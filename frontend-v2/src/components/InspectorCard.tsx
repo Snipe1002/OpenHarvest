@@ -45,20 +45,36 @@ const PILL_STYLE: React.CSSProperties = {
   userSelect: 'none',
 }
 
+// Icon buttons stack a small icon on top of a tiny lowercase label so touch
+// users (iOS Safari ignores `title` tooltips) can tell what each one does at
+// a glance. The pill grows by ~10px in height; on a 390px-wide phone the
+// seven buttons (rot/mv/copy/del/more/close + the type label) still fit
+// without wrap.
 const ICON_BUTTON: React.CSSProperties = {
-  width: 26,
-  height: 26,
+  minWidth: 36,
+  height: 38,
   display: 'inline-flex',
+  flexDirection: 'column',
   alignItems: 'center',
   justifyContent: 'center',
+  gap: 1,
   background: '#2a2d31',
   color: '#e5e5e5',
   border: '1px solid #444',
-  borderRadius: 13,
-  fontSize: 13,
+  borderRadius: 8,
+  fontSize: 14,
   fontFamily: 'inherit',
   cursor: 'pointer',
-  padding: 0,
+  padding: '2px 4px',
+  lineHeight: 1,
+}
+
+const ICON_BUTTON_LABEL: React.CSSProperties = {
+  fontSize: 9,
+  color: '#aaa',
+  textTransform: 'lowercase',
+  letterSpacing: 0.2,
+  lineHeight: 1,
 }
 
 const DELETE_BUTTON: React.CSSProperties = {
@@ -97,6 +113,34 @@ const TINY_LABEL: React.CSSProperties = {
   color: '#888',
   fontSize: 10,
   textTransform: 'uppercase',
+}
+
+const NUDGE_BTN: React.CSSProperties = {
+  background: '#2a2d31',
+  color: '#e5e5e5',
+  border: '1px solid #444',
+  borderRadius: 6,
+  fontSize: 16,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+  padding: 0,
+  lineHeight: 1,
+}
+
+const NUDGE_CENTER: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: 'rgba(60, 130, 200, 0.18)',
+  border: '1px solid #2a3a48',
+  borderRadius: 6,
+  fontSize: 10,
+  color: '#bbb',
+  padding: '0 2px',
+  textAlign: 'center',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
 }
 
 const NUM_INPUT: React.CSSProperties = {
@@ -241,6 +285,8 @@ export default function InspectorCard() {
   const removeEntity = useGarden((s) => s.removeEntity)
   const setTranslateMode = useGarden((s) => s.setTranslateMode)
   const selectEntity = useGarden((s) => s.selectEntity)
+  const snapStep = useGarden((s) => s.snap)
+  const units = useGarden((s) => s.units)
 
   const [expanded, setExpanded] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -252,6 +298,65 @@ export default function InspectorCard() {
     setConfirmingDelete(false)
     setExpanded(false)
   }, [selectedId])
+
+  // Keyboard arrow nudge. Mirrors the on-screen nudge pad — one tap moves
+  // the selected entity by one snap step on world XZ. We pull state via
+  // `useGarden.getState()` inside the handler so the listener can stay
+  // mounted across selection changes without rebinding. Bail when focus is
+  // on a text field (so typing in the size inputs doesn't move the entity)
+  // or when no single entity is picked. Y is intentionally locked.
+  useEffect(() => {
+    const NUDGE_FALLBACK_M = 0.1
+    const handler = (e: KeyboardEvent) => {
+      if (
+        e.key !== 'ArrowUp' &&
+        e.key !== 'ArrowDown' &&
+        e.key !== 'ArrowLeft' &&
+        e.key !== 'ArrowRight'
+      )
+        return
+      const target = e.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      )
+        return
+      const s = useGarden.getState()
+      if (s.primarySelectedIds.length !== 1) return
+      const id = s.primarySelectedIds[0]
+      const ent = s.entities[id]
+      if (!ent || !s.currentGardenId) return
+      const step = s.snap ?? NUDGE_FALLBACK_M
+      const dx = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0
+      const dz = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
+      const p = ent.transform.position
+      const nextTransform: Transform = {
+        ...ent.transform,
+        position: { x: p.x + dx * step, y: p.y, z: p.z + dz * step },
+      }
+      const next: GardenEntity = { ...ent, transform: nextTransform }
+      s.addOrUpdateEntity(next)
+      e.preventDefault()
+      void updateEntity(s.currentGardenId, ent.id, { transform: nextTransform }).then(
+        (updated) => useGarden.getState().addOrUpdateEntity(updated),
+        (err) => {
+          useGarden.getState().addOrUpdateEntity(ent)
+          const msg =
+            err instanceof ApiError
+              ? `Nudge failed (${err.status})`
+              : err instanceof Error
+                ? err.message
+                : 'Nudge failed'
+          useGarden.getState().setToast(msg)
+          console.error('[InspectorCard] nudge failed', err)
+        },
+      )
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   // Button-as-drag-handle for the ⇄ button. Tap toggles legacy translate-mode
   // (preserving the "drag the entity directly" path for power users). Press-
@@ -299,6 +404,20 @@ export default function InspectorCard() {
     const nextTransform: Transform = {
       ...entity.transform,
       position: { ...entity.transform.position, [axis]: value },
+    }
+    void patch({ ...entity, transform: nextTransform }, { transform: nextTransform })
+  }
+
+  // Nudge by world XZ. Step is the active snap distance (so the chip and
+  // the nudge pad always agree on what "one tap" means). Snap=off falls back
+  // to a small default — without one the arrows would do nothing useful.
+  const NUDGE_FALLBACK_M = 0.1
+  const nudgeBy = (dx: number, dz: number) => {
+    const step = snapStep ?? NUDGE_FALLBACK_M
+    const p = entity.transform.position
+    const nextTransform: Transform = {
+      ...entity.transform,
+      position: { x: p.x + dx * step, y: p.y, z: p.z + dz * step },
     }
     void patch({ ...entity, transform: nextTransform }, { transform: nextTransform })
   }
@@ -456,17 +575,20 @@ export default function InspectorCard() {
             </span>
           )}
           <button style={ICON_BUTTON} onClick={onRotate} title="Rotate 90°">
-            ⟳
+            <span>⟳</span>
+            <span style={ICON_BUTTON_LABEL}>rotate</span>
           </button>
           <button
             style={ICON_BUTTON}
             onPointerDown={buttonDrag.onPointerDown}
             title="Tap to toggle translate mode, or press and drag to move directly"
           >
-            ⇄
+            <span>⇄</span>
+            <span style={ICON_BUTTON_LABEL}>move</span>
           </button>
           <button style={ICON_BUTTON} onClick={onDuplicate} title="Duplicate">
-            📋
+            <span>📋</span>
+            <span style={ICON_BUTTON_LABEL}>copy</span>
           </button>
           <button
             style={confirmingDelete ? DELETE_CONFIRM : DELETE_BUTTON}
@@ -474,22 +596,59 @@ export default function InspectorCard() {
             onBlur={() => setConfirmingDelete(false)}
             title={confirmingDelete ? 'Confirm delete?' : 'Delete'}
           >
-            🗑
+            <span>🗑</span>
+            <span style={ICON_BUTTON_LABEL}>{confirmingDelete ? 'confirm?' : 'delete'}</span>
           </button>
           <button
             style={{ ...ICON_BUTTON, background: expanded ? '#444' : ICON_BUTTON.background }}
             onClick={() => setExpanded((v) => !v)}
             title="Edit size details"
           >
-            ⋯
+            <span>⋯</span>
+            <span style={ICON_BUTTON_LABEL}>size</span>
           </button>
           <button
             style={ICON_BUTTON}
             onClick={() => clearSelection()}
             title="Close"
           >
-            ✕
+            <span>✕</span>
+            <span style={ICON_BUTTON_LABEL}>close</span>
           </button>
+        </div>
+
+        {/* Nudge pad — 3x3 directional grid that moves the entity by one snap
+            step on world XZ (Y is intentionally locked; height edits go
+            through the size detail panel). Center cell shows the active step
+            so the user knows what one arrow tap will do; tap-and-hold also
+            repeats via native browser key-repeat when keyboard arrows are
+            used in App.tsx. The pad always shows once an entity is picked —
+            no extra mode toggle, since fine adjustment after a coarse drag
+            is the most common workflow. */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 36px)',
+            gridTemplateRows: 'repeat(3, 32px)',
+            gap: 2,
+            padding: 4,
+            background: 'rgba(20, 22, 24, 0.92)',
+            border: '1px solid #444',
+            borderRadius: 8,
+            pointerEvents: 'auto',
+          }}
+        >
+          <div />
+          <button style={NUDGE_BTN} onClick={() => nudgeBy(0, -1)} title="Nudge north (−Z)" aria-label="nudge north">↑</button>
+          <div />
+          <button style={NUDGE_BTN} onClick={() => nudgeBy(-1, 0)} title="Nudge west (−X)" aria-label="nudge west">←</button>
+          <div style={NUDGE_CENTER} title={snapStep === null ? `step: ${formatLength(NUDGE_FALLBACK_M, units)} (snap off — using default)` : `step: ${formatLength(snapStep, units)}`}>
+            {snapStep === null ? formatLength(NUDGE_FALLBACK_M, units) : formatLength(snapStep, units)}
+          </div>
+          <button style={NUDGE_BTN} onClick={() => nudgeBy(1, 0)} title="Nudge east (+X)" aria-label="nudge east">→</button>
+          <div />
+          <button style={NUDGE_BTN} onClick={() => nudgeBy(0, 1)} title="Nudge south (+Z)" aria-label="nudge south">↓</button>
+          <div />
         </div>
 
         {/* Detail panel — collapsible. Shows BOTH position and size when
