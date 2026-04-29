@@ -131,7 +131,12 @@ export default function DemoBed({ entity, children }: DemoBedProps) {
     : isMultiSelected
       ? '#4ec9ff'
       : '#ffaa00'
-  const outlineThickness = isExtension ? 2 : 4
+  // drei's <Outlines thickness> is in WORLD UNITS, not pixels — values like
+  // "4" render the outline 4 meters thick, which projects offscreen and
+  // makes the glow invisible. ~4cm reads as a chunky highlight at typical
+  // garden scale; extension picks get a thinner outline so the user can
+  // tell primaries from descendants pulled in by extend-mode.
+  const outlineThickness = isExtension ? 0.02 : 0.04
 
   // All plank/soil coords are RELATIVE to the group center (which sits at the
   // bed's mid-height). Rotation on the group then rotates the whole bed

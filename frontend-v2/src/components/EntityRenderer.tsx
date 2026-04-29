@@ -158,7 +158,10 @@ function PrefabPlaceholder({ entity, children }: { entity: GardenEntity; childre
     : isMultiSelected
       ? '#4ec9ff'
       : '#ffaa00'
-  const outlineThickness = isExtension ? 2 : 4
+  // drei <Outlines thickness> is in world units, not pixels — 4 means 4
+  // meters which renders offscreen. ~3cm reads as a clear glow at the
+  // entity scale we use; extension gets thinner so primaries stand out.
+  const outlineThickness = isExtension ? 0.015 : 0.03
   return (
     <group
       position={[x, y, z]}
@@ -241,7 +244,10 @@ function UnknownDebugCube({ entity, children }: { entity: GardenEntity; children
     : isMultiSelected
       ? '#4ec9ff'
       : '#ffaa00'
-  const outlineThickness = isExtension ? 2 : 4
+  // drei <Outlines thickness> is in world units, not pixels — 4 means 4
+  // meters which renders offscreen. ~3cm reads as a clear glow at the
+  // entity scale we use; extension gets thinner so primaries stand out.
+  const outlineThickness = isExtension ? 0.015 : 0.03
   return (
     <group
       position={[x, y, z]}
