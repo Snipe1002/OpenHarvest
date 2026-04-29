@@ -406,6 +406,7 @@ export default function MultiSelectInspector() {
   const setGroupTranslateActive = useGarden((s) => s.setGroupTranslateActive)
   const units = useGarden((s) => s.units)
   const showLabels = useGarden((s) => s.showButtonLabels)
+  const snapMode = useGarden((s) => s.snapMode)
 
   const selected: GardenEntity[] = useMemo(() => {
     const out: GardenEntity[] = []
@@ -622,8 +623,23 @@ export default function MultiSelectInspector() {
     if (arrangeMode === 'grid') {
       const totalCols = Math.max(1, Math.min(cols, entitiesArr.length))
       const totalRows = Math.ceil(entitiesArr.length / totalCols)
-      const gridWidth = (totalCols - 1) * gapXm
-      const gridHeight = (totalRows - 1) * gapZm
+      // Edge mode: gap is the SPACE between bed edges. We add the average
+      // bed footprint to the user's gap to get the center-to-center step.
+      // Center mode: gap IS center-to-center, matches the legacy behavior.
+      // Without this branch, dragging the gap slider to 0 in edge mode
+      // overlaps every bed onto the centroid — see user report 2026-04-29.
+      let avgWidth = 0
+      let avgDepth = 0
+      for (const e of entitiesArr) {
+        avgWidth += e.geometry.size?.x ?? 0
+        avgDepth += e.geometry.size?.z ?? 0
+      }
+      avgWidth /= entitiesArr.length
+      avgDepth /= entitiesArr.length
+      const colStep = snapMode === 'edge' ? avgWidth + gapXm : gapXm
+      const rowStep = snapMode === 'edge' ? avgDepth + gapZm : gapZm
+      const gridWidth = (totalCols - 1) * colStep
+      const gridHeight = (totalRows - 1) * rowStep
       const x0 = cx - gridWidth / 2
       const z0 = cz - gridHeight / 2
       layout = entitiesArr.map((e, i) => {
@@ -633,7 +649,7 @@ export default function MultiSelectInspector() {
           ...e,
           transform: {
             ...e.transform,
-            position: { x: x0 + col * gapXm, y: e.transform.position.y, z: z0 + row * gapZm },
+            position: { x: x0 + col * colStep, y: e.transform.position.y, z: z0 + row * rowStep },
           },
         }
       })
@@ -657,7 +673,7 @@ export default function MultiSelectInspector() {
     }
     const store = useGarden.getState()
     for (const e of layout) store.addOrUpdateEntity(e)
-  }, [arrangeOpen, arrangeMode, cols, gapXm, gapZm, radiusM, startAngleDeg])
+  }, [arrangeOpen, arrangeMode, cols, gapXm, gapZm, radiusM, startAngleDeg, snapMode])
 
   // Group keyboard nudge — arrow keys translate every primary by one snap
   // step on world XZ when 2+ are selected. Mirrors InspectorCard's
@@ -860,7 +876,8 @@ export default function MultiSelectInspector() {
         },
       }
     })
-    await applyOptimisticPatch(next)
+    const result = await applyOptimisticPatch(next)
+    if (result.ok) setToast(`Rotated ${selected.length} by 90°`)
   }
 
   const onAlignX = async (mode: 'min' | 'max') => {
@@ -876,7 +893,8 @@ export default function MultiSelectInspector() {
         position: { ...e.transform.position, x: target },
       },
     }))
-    await applyOptimisticPatch(next)
+    const result = await applyOptimisticPatch(next)
+    if (result.ok) setToast(`Aligned ${selected.length} on ${mode === 'min' ? 'left' : 'right'}`)
   }
 
   const onAlignZ = async (mode: 'min' | 'max') => {
@@ -892,35 +910,52 @@ export default function MultiSelectInspector() {
         position: { ...e.transform.position, z: target },
       },
     }))
-    await applyOptimisticPatch(next)
+    const result = await applyOptimisticPatch(next)
+    if (result.ok) setToast(`Aligned ${selected.length} on ${mode === 'min' ? 'top' : 'bottom'}`)
   }
 
   const onDistribute = async (axis: 'x' | 'z') => {
-    if (selected.length < 3) return
-    // Sort by axis ascending; keep first/last fixed; redistribute middles
-    // at equal spacing between them.
+    // 2 entities is enough now: even spacing on the chosen axis + cross-
+    // axis collapsed to centroid still produces a sensible 2-element line.
+    if (selected.length < 2) return
+    // Sort by axis ascending so the result reads left-to-right (or top-to-
+    // bottom for Z) regardless of selection order.
     const sorted = [...selected].sort(
       (a, b) => a.transform.position[axis] - b.transform.position[axis],
     )
     const lo = sorted[0].transform.position[axis]
     const hi = sorted[sorted.length - 1].transform.position[axis]
-    const step = (hi - lo) / (sorted.length - 1)
-    // Build new entities for the middles only; extremes pass through.
+    const step = sorted.length > 1 ? (hi - lo) / (sorted.length - 1) : 0
+    // Cross-axis is pulled to the group's centroid on that axis. Without
+    // this, distribute produced equal X spacing but kept Z scattered, so
+    // the result looked like a "twisted cluster" rather than a clean line
+    // (user report 2026-04-29). Flattening the cross axis is what users
+    // actually mean when they say "distribute these in a row."
+    const crossAxis: 'x' | 'z' = axis === 'x' ? 'z' : 'x'
+    let crossSum = 0
+    for (const e of sorted) crossSum += e.transform.position[crossAxis]
+    const crossCentroid = crossSum / sorted.length
     const updates: Record<string, GardenEntity> = {}
-    for (let i = 1; i < sorted.length - 1; i++) {
+    for (let i = 0; i < sorted.length; i++) {
       const e = sorted[i]
-      const target = lo + step * i
       updates[e.id] = {
         ...e,
         transform: {
           ...e.transform,
-          position: { ...e.transform.position, [axis]: target },
+          position: {
+            ...e.transform.position,
+            [axis]: lo + step * i,
+            [crossAxis]: crossCentroid,
+          },
         },
       }
     }
-    // Apply in selection order so the optimistic patcher snapshots match.
     const next = selected.map((e) => updates[e.id] ?? e)
-    await applyOptimisticPatch(next)
+    const result = await applyOptimisticPatch(next)
+    if (result.ok) {
+      const label = axis.toUpperCase()
+      setToast(`Distributed ${selected.length} along ${label}`)
+    }
   }
 
   /**
@@ -934,7 +969,7 @@ export default function MultiSelectInspector() {
    * Distribute X / Z. Caller should disable the button at <3 too.
    */
   const onNormalize = async () => {
-    if (selected.length < 3) return
+    if (selected.length < 2) return
     let minX = Infinity
     let maxX = -Infinity
     let minZ = Infinity
@@ -1068,7 +1103,11 @@ export default function MultiSelectInspector() {
     setArrangeOpen(false)
   }
 
-  const canDistribute = selected.length >= 3
+  // Distribute used to require 3+ entities (so there were "middles" between
+  // the fixed extremes). The new behavior collapses the cross axis to the
+  // centroid AND repositions every entity along the chosen axis, which
+  // makes 2-entity distribute a useful "snap them onto a line" op too.
+  const canDistribute = selected.length >= 2
   // Level-sensitive ops (Distribute, Normalize, Align, Rotate) require all
   // primaries share a coordinate frame. When the selection spans multiple
   // levels — e.g. a top-level bed AND a plant inside a different bed — the
@@ -1077,9 +1116,7 @@ export default function MultiSelectInspector() {
   // they don't depend on a shared frame.
   const levelLockedDisabled = isMixedLevel
   const buttonDisabled = busy
-  const distributeTooltipSuffix = canDistribute
-    ? ''
-    : ' — needs 3+ primaries'
+  const distributeTooltipSuffix = canDistribute ? '' : ' — needs 2+ primaries'
   const mixedTooltip =
     'Selection spans hierarchy levels — pick items at one level to use this.'
 
@@ -1182,7 +1219,16 @@ export default function MultiSelectInspector() {
                 </span>
               </div>
               <div data-tour-id="arrange-grid-gap-x" style={FIELD_ROW}>
-                <span style={FIELD_LABEL} title="Spacing between columns (world X axis)">Col gap</span>
+                <span
+                  style={FIELD_LABEL}
+                  title={
+                    snapMode === 'edge'
+                      ? 'Edge-to-edge gap between columns. 0 means columns touch.'
+                      : 'Center-to-center distance between columns.'
+                  }
+                >
+                  Col gap{snapMode === 'edge' ? '' : '*'}
+                </span>
                 <input
                   type="range"
                   style={SLIDER_STYLE}
@@ -1207,7 +1253,16 @@ export default function MultiSelectInspector() {
                 />
               </div>
               <div data-tour-id="arrange-grid-gap-z" style={FIELD_ROW}>
-                <span style={FIELD_LABEL} title="Spacing between rows (world Z axis)">Row gap</span>
+                <span
+                  style={FIELD_LABEL}
+                  title={
+                    snapMode === 'edge'
+                      ? 'Edge-to-edge gap between rows. 0 means rows touch.'
+                      : 'Center-to-center distance between rows.'
+                  }
+                >
+                  Row gap{snapMode === 'edge' ? '' : '*'}
+                </span>
                 <input
                   type="range"
                   style={SLIDER_STYLE}

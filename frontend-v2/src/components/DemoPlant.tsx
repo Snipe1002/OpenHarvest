@@ -126,7 +126,9 @@ export default function DemoPlant({ entity, children }: DemoPlantProps) {
     : isMultiSelected
       ? '#4ec9ff'
       : '#ffaa00'
-  const outlineThickness = isExtension ? 2 : 4
+  // drei <Outlines thickness> is in world units. Plants are tiny so use a
+  // smaller thickness than beds — 1.5cm primary, 0.7cm extension.
+  const outlineThickness = isExtension ? 0.007 : 0.015
 
   return (
     <group
