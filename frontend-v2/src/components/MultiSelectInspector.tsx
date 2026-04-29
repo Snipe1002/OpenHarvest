@@ -71,6 +71,11 @@ import { useButtonDragHandle } from './useButtonDragHandle'
 const PILL_STYLE: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
+  // Allow the action bar to wrap to a second row when the labeled-button
+  // variant is active — 13 buttons at 36px each don't fit on a phone width
+  // viewport without wrapping.
+  flexWrap: 'wrap',
+  rowGap: 4,
   gap: 4,
   background: 'rgba(20, 22, 24, 0.92)',
   color: '#e5e5e5',
@@ -80,9 +85,10 @@ const PILL_STYLE: React.CSSProperties = {
   borderRadius: 16,
   border: '1px solid #4ec9ff',
   boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
-  whiteSpace: 'nowrap',
   pointerEvents: 'auto',
   userSelect: 'none',
+  justifyContent: 'center',
+  maxWidth: 'calc(100vw - 24px)',
 }
 
 /**
@@ -149,6 +155,37 @@ const ICON_BUTTON: React.CSSProperties = {
   fontFamily: 'inherit',
   cursor: 'pointer',
   padding: 0,
+}
+
+// Labeled variant — used when the user has Labels: on. Stacks a small
+// lowercase word under the glyph so touch users (iOS Safari hides title
+// tooltips) can tell what each one does at a glance. The icon stays the
+// same size; the height grows to ~38px and width grows to ~36px.
+const ICON_BUTTON_LABELED: React.CSSProperties = {
+  minWidth: 36,
+  height: 38,
+  display: 'inline-flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 1,
+  background: '#2a2d31',
+  color: '#e5e5e5',
+  border: '1px solid #444',
+  borderRadius: 8,
+  fontSize: 14,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+  padding: '2px 4px',
+  lineHeight: 1,
+}
+
+const ICON_BUTTON_LABEL: React.CSSProperties = {
+  fontSize: 9,
+  color: '#aaa',
+  textTransform: 'lowercase',
+  letterSpacing: 0.2,
+  lineHeight: 1,
 }
 
 const ACTIVE_BUTTON: React.CSSProperties = {
@@ -368,6 +405,7 @@ export default function MultiSelectInspector() {
   const groupTranslateActive = useGarden((s) => s.groupTranslateActive)
   const setGroupTranslateActive = useGarden((s) => s.setGroupTranslateActive)
   const units = useGarden((s) => s.units)
+  const showLabels = useGarden((s) => s.showButtonLabels)
 
   const selected: GardenEntity[] = useMemo(() => {
     const out: GardenEntity[] = []
@@ -937,6 +975,22 @@ export default function MultiSelectInspector() {
     }))
     void applyOptimisticPatch(next)
   }
+  // Vertical group nudge — raise or lower every primary by one step on
+  // world Y. Floor at y=0 so the group never sinks below ground.
+  const nudgeYBy = (dy: number) => {
+    const next: GardenEntity[] = selected.map((e) => ({
+      ...e,
+      transform: {
+        ...e.transform,
+        position: {
+          x: e.transform.position.x,
+          y: Math.max(0, e.transform.position.y + dy * snapStep),
+          z: e.transform.position.z,
+        },
+      },
+    }))
+    void applyOptimisticPatch(next)
+  }
 
   // -------------------------------------------------------------------------
   // Arrange — cartesian grid + polar ring layout helpers.
@@ -1033,6 +1087,37 @@ export default function MultiSelectInspector() {
   const breakdown = describeKindBreakdown(selected)
   const wrapStyle: React.CSSProperties = { ...WRAP_STYLE_BASE, bottom: toolbarBottom }
 
+  // When the user has Labels: on, swap every action-pill button to the
+  // taller icon+label variant. The five style refs below are the only
+  // states a button can be in (base, active, delete, delete-confirm,
+  // disabled); deriving them once here keeps the JSX simple.
+  const baseBtn = showLabels ? ICON_BUTTON_LABELED : ICON_BUTTON
+  const activeBtn: React.CSSProperties = showLabels
+    ? { ...ICON_BUTTON_LABELED, background: 'rgba(60, 130, 200, 0.85)', borderColor: '#4a90c8' }
+    : ACTIVE_BUTTON
+  const deleteBtn: React.CSSProperties = showLabels
+    ? { ...ICON_BUTTON_LABELED, background: '#5a1f1f', borderColor: '#8a2a2a' }
+    : DELETE_BUTTON
+  const deleteConfirmBtn: React.CSSProperties = showLabels
+    ? { ...ICON_BUTTON_LABELED, background: '#a02a2a', borderColor: '#c04040' }
+    : DELETE_CONFIRM
+  const disabledBtn: React.CSSProperties = showLabels
+    ? { ...ICON_BUTTON_LABELED, opacity: 0.4, cursor: 'not-allowed' }
+    : DISABLED_BUTTON
+
+  // Render an icon glyph plus optional lowercase label below it. Used
+  // inside every action-pill button so the label is conditional on the
+  // showLabels store flag.
+  const lbl = (icon: string, label: string) =>
+    showLabels ? (
+      <>
+        <span>{icon}</span>
+        <span style={ICON_BUTTON_LABEL}>{label}</span>
+      </>
+    ) : (
+      icon
+    )
+
   return (
     <div style={wrapStyle} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
       <div data-tour-id="multi-header" style={HEADER_STYLE}>
@@ -1097,7 +1182,7 @@ export default function MultiSelectInspector() {
                 </span>
               </div>
               <div data-tour-id="arrange-grid-gap-x" style={FIELD_ROW}>
-                <span style={FIELD_LABEL}>Gap X</span>
+                <span style={FIELD_LABEL} title="Spacing between columns (world X axis)">Col gap</span>
                 <input
                   type="range"
                   style={SLIDER_STYLE}
@@ -1122,7 +1207,7 @@ export default function MultiSelectInspector() {
                 />
               </div>
               <div data-tour-id="arrange-grid-gap-z" style={FIELD_ROW}>
-                <span style={FIELD_LABEL}>Gap Z</span>
+                <span style={FIELD_LABEL} title="Spacing between rows (world Z axis)">Row gap</span>
                 <input
                   type="range"
                   style={SLIDER_STYLE}
@@ -1219,11 +1304,11 @@ export default function MultiSelectInspector() {
           entity fine-tune, but the callback translates every primary at
           once. Sits just above the action pill so the fine-tune workflow
           flows visually downward into the macro-op buttons. */}
-      <NudgePad step={snapStep} units={units} onNudge={nudgeBy} tourId="multi-nudge-pad" />
+      <NudgePad step={snapStep} units={units} onNudge={nudgeBy} onNudgeY={nudgeYBy} tourId="multi-nudge-pad" />
       <div style={PILL_STYLE}>
         <button
           data-tour-id="multi-rotate"
-          style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
+          style={buttonDisabled || levelLockedDisabled ? disabledBtn : baseBtn}
           onClick={onRotate}
           disabled={buttonDisabled || levelLockedDisabled}
           title={
@@ -1232,16 +1317,12 @@ export default function MultiSelectInspector() {
               : 'Rotate group 90° around centroid (world Y)'
           }
         >
-          ⟳
+          {lbl('⟳', 'rotate')}
         </button>
         <button
           data-tour-id="multi-translate"
           style={
-            buttonDisabled
-              ? DISABLED_BUTTON
-              : groupTranslateActive
-                ? ACTIVE_BUTTON
-                : ICON_BUTTON
+            buttonDisabled ? disabledBtn : groupTranslateActive ? activeBtn : baseBtn
           }
           onPointerDown={buttonDisabled ? undefined : groupButtonDrag.onPointerDown}
           disabled={buttonDisabled}
@@ -1251,25 +1332,21 @@ export default function MultiSelectInspector() {
               : 'Tap to enter group translate, or press and drag this button to move all directly'
           }
         >
-          ⇄
+          {lbl('⇄', 'move')}
         </button>
         <button
           data-tour-id="multi-duplicate"
-          style={buttonDisabled ? DISABLED_BUTTON : ICON_BUTTON}
+          style={buttonDisabled ? disabledBtn : baseBtn}
           onClick={onDuplicateAll}
           disabled={buttonDisabled}
           title="Duplicate all (offset +0.5m on X) — works on any selection"
         >
-          📋
+          {lbl('📋', 'copy')}
         </button>
         <span style={{ width: 1, alignSelf: 'stretch', background: '#444', margin: '0 2px' }} />
         <button
           data-tour-id="multi-normalize"
-          style={
-            buttonDisabled || !canDistribute || levelLockedDisabled
-              ? DISABLED_BUTTON
-              : ICON_BUTTON
-          }
+          style={buttonDisabled || !canDistribute || levelLockedDisabled ? disabledBtn : baseBtn}
           onClick={onNormalize}
           disabled={buttonDisabled || !canDistribute || levelLockedDisabled}
           title={
@@ -1280,15 +1357,11 @@ export default function MultiSelectInspector() {
                 : `Normalize${distributeTooltipSuffix}`
           }
         >
-          ⇔
+          {lbl('⇔', 'norm')}
         </button>
         <button
           data-tour-id="multi-distribute-x"
-          style={
-            buttonDisabled || !canDistribute || levelLockedDisabled
-              ? DISABLED_BUTTON
-              : ICON_BUTTON
-          }
+          style={buttonDisabled || !canDistribute || levelLockedDisabled ? disabledBtn : baseBtn}
           onClick={() => onDistribute('x')}
           disabled={buttonDisabled || !canDistribute || levelLockedDisabled}
           title={
@@ -1299,15 +1372,11 @@ export default function MultiSelectInspector() {
                 : `Distribute X${distributeTooltipSuffix}`
           }
         >
-          ↔
+          {lbl('↔', 'dist x')}
         </button>
         <button
           data-tour-id="multi-distribute-z"
-          style={
-            buttonDisabled || !canDistribute || levelLockedDisabled
-              ? DISABLED_BUTTON
-              : ICON_BUTTON
-          }
+          style={buttonDisabled || !canDistribute || levelLockedDisabled ? disabledBtn : baseBtn}
           onClick={() => onDistribute('z')}
           disabled={buttonDisabled || !canDistribute || levelLockedDisabled}
           title={
@@ -1318,30 +1387,30 @@ export default function MultiSelectInspector() {
                 : `Distribute Z${distributeTooltipSuffix}`
           }
         >
-          ↕
+          {lbl('↕', 'dist z')}
         </button>
         <span style={{ width: 1, alignSelf: 'stretch', background: '#444', margin: '0 2px' }} />
         <button
           data-tour-id="multi-align-l"
-          style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
+          style={buttonDisabled || levelLockedDisabled ? disabledBtn : baseBtn}
           onClick={() => onAlignX('min')}
           disabled={buttonDisabled || levelLockedDisabled}
           title={levelLockedDisabled ? mixedTooltip : 'Align Left (min X)'}
         >
-          ⇤
+          {lbl('⇤', 'align l')}
         </button>
         <button
           data-tour-id="multi-align-r"
-          style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
+          style={buttonDisabled || levelLockedDisabled ? disabledBtn : baseBtn}
           onClick={() => onAlignX('max')}
           disabled={buttonDisabled || levelLockedDisabled}
           title={levelLockedDisabled ? mixedTooltip : 'Align Right (max X)'}
         >
-          ⇥
+          {lbl('⇥', 'align r')}
         </button>
         <button
           data-tour-id="multi-align-t"
-          style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
+          style={buttonDisabled || levelLockedDisabled ? disabledBtn : baseBtn}
           onClick={() => onAlignZ('min')}
           disabled={buttonDisabled || levelLockedDisabled}
           title={
@@ -1350,26 +1419,26 @@ export default function MultiSelectInspector() {
               : 'Align Top — minimum Z (toward camera-back in default view)'
           }
         >
-          ⇩
+          {lbl('⇩', 'align t')}
         </button>
         <button
           data-tour-id="multi-align-b"
-          style={buttonDisabled || levelLockedDisabled ? DISABLED_BUTTON : ICON_BUTTON}
+          style={buttonDisabled || levelLockedDisabled ? disabledBtn : baseBtn}
           onClick={() => onAlignZ('max')}
           disabled={buttonDisabled || levelLockedDisabled}
           title={levelLockedDisabled ? mixedTooltip : 'Align Bottom — maximum Z'}
         >
-          ⇧
+          {lbl('⇧', 'align b')}
         </button>
         <span style={{ width: 1, alignSelf: 'stretch', background: '#444', margin: '0 2px' }} />
         <button
           data-tour-id="multi-arrange"
           style={
             buttonDisabled || levelLockedDisabled
-              ? DISABLED_BUTTON
+              ? disabledBtn
               : arrangeOpen
-                ? ACTIVE_BUTTON
-                : ICON_BUTTON
+                ? activeBtn
+                : baseBtn
           }
           onClick={() => (arrangeOpen ? onArrangeCancel() : setArrangeOpen(true))}
           disabled={buttonDisabled || levelLockedDisabled}
@@ -1379,26 +1448,26 @@ export default function MultiSelectInspector() {
               : 'Arrange in a grid or ring around the centroid (live preview)'
           }
         >
-          ▤
+          {lbl('▤', 'arrange')}
         </button>
         <span style={{ width: 1, alignSelf: 'stretch', background: '#444', margin: '0 2px' }} />
         <button
           data-tour-id="multi-delete"
-          style={confirmingDelete ? DELETE_CONFIRM : buttonDisabled ? DISABLED_BUTTON : DELETE_BUTTON}
+          style={confirmingDelete ? deleteConfirmBtn : buttonDisabled ? disabledBtn : deleteBtn}
           onClick={onDeleteAll}
           onBlur={() => setConfirmingDelete(false)}
           disabled={buttonDisabled}
           title={confirmingDelete ? 'Confirm delete?' : 'Delete all selected primaries'}
         >
-          🗑
+          {lbl('🗑', confirmingDelete ? 'confirm?' : 'delete')}
         </button>
         <button
           data-tour-id="multi-close"
-          style={ICON_BUTTON}
+          style={baseBtn}
           onClick={() => clearSelection()}
           title="Close (clear selection)"
         >
-          ✕
+          {lbl('✕', 'close')}
         </button>
       </div>
     </div>

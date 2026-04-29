@@ -19,6 +19,7 @@ const SNAP_MODE_STORAGE_KEY = 'openharvest:v2:snapMode'
 const STICKY_STORAGE_KEY = 'openharvest:v2:stickyPlacement'
 const MULTI_STORAGE_KEY = 'openharvest:v2:multiSelectMode'
 const UNITS_STORAGE_KEY = 'openharvest:v2:units'
+const LABELS_STORAGE_KEY = 'openharvest:v2:showButtonLabels'
 
 function readPersistedGardenId(): Guid | null {
   if (typeof window === 'undefined') return null
@@ -179,6 +180,29 @@ function readPersistedMultiMode(): boolean {
     return window.localStorage.getItem(MULTI_STORAGE_KEY) === '1'
   } catch {
     return false
+  }
+}
+
+function readPersistedLabels(): boolean {
+  // Default to ON — labels-under-icons help touch users discover what each
+  // button does. Stored as '0' / '1'; absence is treated as on so first-
+  // run users get the helpful default.
+  if (typeof window === 'undefined') return true
+  try {
+    const v = window.localStorage.getItem(LABELS_STORAGE_KEY)
+    if (v === null) return true
+    return v === '1'
+  } catch {
+    return true
+  }
+}
+
+function writePersistedLabels(v: boolean): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(LABELS_STORAGE_KEY, v ? '1' : '0')
+  } catch {
+    /* no-op */
   }
 }
 
@@ -470,6 +494,15 @@ export interface GardenState {
   units: Units
 
   /**
+   * When true, every icon button in the inspector and multi-select bar
+   * renders a small lowercase label below its glyph. Touch users (iOS
+   * Safari) can't see HTML title tooltips, so labels are the discoverability
+   * mechanism. Defaults ON; toggleable from the LabelsChip in the top-left
+   * column. Persisted to localStorage.
+   */
+  showButtonLabels: boolean
+
+  /**
    * Data-driven prefab catalog fetched once on app boot from
    * `GET /api/v1/prefabs`. Drives the prefab picker, default geometry, and
    * (in upcoming work) hierarchy / placement / AI rules. `null` while loading
@@ -551,6 +584,7 @@ export interface GardenState {
   selectWall: (id: string | null) => void
   /** Toggle / set sticky placement, persist to localStorage. */
   setStickyPlacement: (v: boolean) => void
+  setShowButtonLabels: (v: boolean) => void
   /** Toggle / set multi-select mode, persist to localStorage. */
   setMultiSelectMode: (v: boolean) => void
   /**
@@ -590,6 +624,7 @@ export const useGarden = create<GardenState>((set, get) => ({
   regionPaint: null,
   selectedWallId: null,
   stickyPlacement: readPersistedSticky(),
+  showButtonLabels: readPersistedLabels(),
   multiSelectMode: readPersistedMultiMode(),
   units: readPersistedUnits(),
   prefabCatalog: null,
@@ -843,6 +878,11 @@ export const useGarden = create<GardenState>((set, get) => ({
       translateModeId: id ? null : s.translateModeId,
       groupTranslateActive: id ? false : s.groupTranslateActive,
     }))
+  },
+
+  setShowButtonLabels: (v) => {
+    writePersistedLabels(v)
+    set({ showButtonLabels: v })
   },
 
   setStickyPlacement: (v) => {
