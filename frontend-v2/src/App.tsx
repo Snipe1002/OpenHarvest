@@ -7,6 +7,7 @@ import EntityRenderer from './components/EntityRenderer'
 import type { GardenEntity, Guid } from './api/types'
 import { createDoorOnWall, createWindowOnWall } from './components/houseHelpers'
 import InspectorCard from './components/InspectorCard'
+import LabelsChip from './components/LabelsChip'
 import MainToolbar from './components/MainToolbar'
 import MultiChip from './components/MultiChip'
 import MultiSelectInspector from './components/MultiSelectInspector'
@@ -251,6 +252,7 @@ export default function App() {
       <StickyChip />
       <MultiChip />
       <UnitsChip />
+      <LabelsChip />
       <InspectorCard />
       <MainToolbar />
       <MultiSelectInspector />

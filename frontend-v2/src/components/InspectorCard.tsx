@@ -260,6 +260,7 @@ export default function InspectorCard() {
   const selectEntity = useGarden((s) => s.selectEntity)
   const snapStep = useGarden((s) => s.snap)
   const units = useGarden((s) => s.units)
+  const showLabels = useGarden((s) => s.showButtonLabels)
 
   const [expanded, setExpanded] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -391,6 +392,21 @@ export default function InspectorCard() {
     const nextTransform: Transform = {
       ...entity.transform,
       position: { x: p.x + dx * step, y: p.y, z: p.z + dz * step },
+    }
+    void patch({ ...entity, transform: nextTransform }, { transform: nextTransform })
+  }
+
+  // Vertical nudge — moves the entity up or down by one snap step on world
+  // Y. Used for stacking (e.g. raising a plant onto a shelf). Y is locked
+  // out of the XZ pad on purpose; the dedicated up/down column avoids the
+  // user accidentally raising things while trying to slide them across the
+  // ground.
+  const nudgeYBy = (dy: number) => {
+    const step = snapStep ?? NUDGE_FALLBACK_M
+    const p = entity.transform.position
+    const nextTransform: Transform = {
+      ...entity.transform,
+      position: { x: p.x, y: Math.max(0, p.y + dy * step), z: p.z },
     }
     void patch({ ...entity, transform: nextTransform }, { transform: nextTransform })
   }
@@ -549,7 +565,7 @@ export default function InspectorCard() {
           )}
           <button data-tour-id="insp-rotate" style={ICON_BUTTON} onClick={onRotate} title="Rotate 90°">
             <span>⟳</span>
-            <span style={ICON_BUTTON_LABEL}>rotate</span>
+            {showLabels && <span style={ICON_BUTTON_LABEL}>rotate</span>}
           </button>
           <button
             data-tour-id="insp-move"
@@ -558,11 +574,11 @@ export default function InspectorCard() {
             title="Tap to toggle translate mode, or press and drag to move directly"
           >
             <span>⇄</span>
-            <span style={ICON_BUTTON_LABEL}>move</span>
+            {showLabels && <span style={ICON_BUTTON_LABEL}>move</span>}
           </button>
           <button data-tour-id="insp-copy" style={ICON_BUTTON} onClick={onDuplicate} title="Duplicate">
             <span>📋</span>
-            <span style={ICON_BUTTON_LABEL}>copy</span>
+            {showLabels && <span style={ICON_BUTTON_LABEL}>copy</span>}
           </button>
           <button
             data-tour-id="insp-delete"
@@ -572,7 +588,7 @@ export default function InspectorCard() {
             title={confirmingDelete ? 'Confirm delete?' : 'Delete'}
           >
             <span>🗑</span>
-            <span style={ICON_BUTTON_LABEL}>{confirmingDelete ? 'confirm?' : 'delete'}</span>
+            {showLabels && <span style={ICON_BUTTON_LABEL}>{confirmingDelete ? 'confirm?' : 'delete'}</span>}
           </button>
           <button
             data-tour-id="insp-size"
@@ -581,7 +597,7 @@ export default function InspectorCard() {
             title="Edit size details"
           >
             <span>⋯</span>
-            <span style={ICON_BUTTON_LABEL}>size</span>
+            {showLabels && <span style={ICON_BUTTON_LABEL}>size</span>}
           </button>
           <button
             data-tour-id="insp-close"
@@ -590,7 +606,7 @@ export default function InspectorCard() {
             title="Close"
           >
             <span>✕</span>
-            <span style={ICON_BUTTON_LABEL}>close</span>
+            {showLabels && <span style={ICON_BUTTON_LABEL}>close</span>}
           </button>
         </div>
 
@@ -604,6 +620,7 @@ export default function InspectorCard() {
           step={snapStep ?? NUDGE_FALLBACK_M}
           units={units}
           onNudge={nudgeBy}
+          onNudgeY={nudgeYBy}
           tourId="insp-nudge-pad"
         />
 
