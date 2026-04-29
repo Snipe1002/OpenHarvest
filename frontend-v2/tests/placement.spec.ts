@@ -38,6 +38,16 @@ async function loadAppAndWait(page: Page) {
   await page.waitForTimeout(WEBGPU_WARMUP_MS)
 }
 
+async function canvasCenter(page: Page): Promise<{ x: number; y: number }> {
+  const canvas = page.locator('canvas').first()
+  const box = await canvas.boundingBox()
+  if (!box) {
+    const vp = page.viewportSize()
+    return { x: (vp?.width ?? 1280) / 2, y: (vp?.height ?? 720) / 2 }
+  }
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+}
+
 async function getGardenId(page: Page): Promise<string> {
   const id = await page.evaluate(() => {
     const store = (window as unknown as { __openharvestStore?: { getState: () => { currentGardenId: string | null } } })
@@ -409,4 +419,230 @@ test('Labels chip toggles button labels in the multi-select bar', async ({
   } finally {
     await deleteEntities(request, gardenId, ids)
   }
+})
+
+// ---------------------------------------------------------------------------
+// Follow-up specs (PR #59)
+// ---------------------------------------------------------------------------
+
+test('arming + Bed and clicking the canvas places a new Bed entity', async ({
+  page,
+  request,
+}) => {
+  await loadAppAndWait(page)
+  const gardenId = await getGardenId(page)
+  // Snapshot the entity-id set before placement so we can detect what the
+  // toolbar created without needing to predict its world coords (camera
+  // projection makes that brittle across runs).
+  const idsBefore = await page.evaluate(() => {
+    const store = (window as unknown as { __openharvestStore?: { getState: () => { entities: Record<string, unknown> } } })
+      .__openharvestStore
+    return Object.keys(store?.getState().entities ?? {})
+  })
+
+  // Disable Sticky so placement exits after a single drop and we don't
+  // accidentally arm a second click.
+  await page.evaluate(() => {
+    const store = (window as unknown as { __openharvestStore?: { getState: () => { setStickyPlacement: (v: boolean) => void } } })
+      .__openharvestStore
+    store?.getState().setStickyPlacement(false)
+  })
+
+  // Arm + Bed via the toolbar — exercises the same code path a finger tap
+  // does, including the placement-state state machine in the store.
+  await page.locator('[data-tour-id="tb-bed"]').click()
+  await page.waitForTimeout(200)
+
+  // Click the canvas to drop. The exact world coord depends on camera
+  // pose; we only need to confirm the toolbar successfully created an
+  // entity, not where it landed.
+  const { x, y } = await canvasCenter(page)
+  await page.mouse.click(x, y)
+  await page.waitForTimeout(SETTLE_MS)
+
+  await page.screenshot({ path: 'tests/artifacts/placement-toolbar-place.png', fullPage: false })
+
+  // Identify the freshly-created entity by id-set diff.
+  const after = await page.evaluate(() => {
+    const store = (window as unknown as { __openharvestStore?: { getState: () => { entities: Record<string, { kind?: string; transform: { position: { x: number; y: number; z: number } } }> } } })
+      .__openharvestStore
+    return store?.getState().entities ?? {}
+  })
+  const beforeSet = new Set(idsBefore)
+  const newIds = Object.keys(after).filter((id) => !beforeSet.has(id))
+  try {
+    expect(newIds.length, `expected exactly one new entity; got ${newIds.length}`).toBe(1)
+    const newEntity = after[newIds[0]]
+    expect(newEntity.kind).toBe('Bed')
+    // Y should be on the ground (the bed's group origin sits at h/2 above
+    // its base; the API stores y=0 for ground placement). Allow a generous
+    // tolerance — exact value depends on the placement helper's defaults.
+    expect(Math.abs(newEntity.transform.position.y)).toBeLessThan(1)
+  } finally {
+    await deleteEntities(request, gardenId, newIds)
+  }
+})
+
+test('arrange Cancel restores every primary to the snapshot positions', async ({
+  page,
+  request,
+}) => {
+  await loadAppAndWait(page)
+  const gardenId = await getGardenId(page)
+  const ids: string[] = []
+  try {
+    // Distinct positions so we can verify per-entity restore.
+    ids.push(await createBed(request, gardenId, { position: { x: 0, y: 0, z: 0 } }))
+    ids.push(await createBed(request, gardenId, { position: { x: 2.5, y: 0, z: 0 } }))
+    ids.push(await createBed(request, gardenId, { position: { x: 0, y: 0, z: 4 } }))
+    ids.push(await createBed(request, gardenId, { position: { x: -3, y: 0, z: -2 } }))
+    await waitForEntitiesPresent(page, ids)
+    await selectIds(page, ids)
+
+    const before = await getEntities(page, ids)
+    const beforeMap = new Map(before.map((e) => [e.id, e.transform.position]))
+
+    // Open arrange + perturb sliders so the live preview moves the entities.
+    await page.locator('[data-tour-id="multi-arrange"]').click()
+    await page.waitForTimeout(500)
+    await page.locator('[data-tour-id="arrange-grid-gap-x"] input[type="range"]').fill('1.5')
+    await page.locator('[data-tour-id="arrange-grid-gap-z"] input[type="range"]').fill('1.5')
+    await page.waitForTimeout(400)
+    await page.screenshot({ path: 'tests/artifacts/placement-arrange-mid-preview.png', fullPage: false })
+
+    // Cancel — positions must snap back exactly to the originals.
+    await page.locator('button:has-text("Cancel")').click()
+    await page.waitForTimeout(SETTLE_MS)
+    await page.screenshot({ path: 'tests/artifacts/placement-arrange-after-cancel.png', fullPage: false })
+
+    const after = await getEntities(page, ids)
+    for (const e of after) {
+      const orig = beforeMap.get(e.id)
+      expect(orig, `original position missing for ${e.id}`).toBeTruthy()
+      expect(Math.abs(e.transform.position.x - orig!.x)).toBeLessThan(0.001)
+      expect(Math.abs(e.transform.position.y - orig!.y)).toBeLessThan(0.001)
+      expect(Math.abs(e.transform.position.z - orig!.z)).toBeLessThan(0.001)
+    }
+  } finally {
+    await deleteEntities(request, gardenId, ids)
+  }
+})
+
+test('rotate-90 around centroid keeps the group centroid in place', async ({
+  page,
+  request,
+}) => {
+  await loadAppAndWait(page)
+  const gardenId = await getGardenId(page)
+  const ids: string[] = []
+  try {
+    ids.push(await createBed(request, gardenId, { position: { x: 1, y: 0, z: 0 } }))
+    ids.push(await createBed(request, gardenId, { position: { x: 4, y: 0, z: 3 } }))
+    ids.push(await createBed(request, gardenId, { position: { x: 0, y: 0, z: 6 } }))
+    await waitForEntitiesPresent(page, ids)
+    await selectIds(page, ids)
+
+    const before = await getEntities(page, ids)
+    const cxBefore = before.reduce((s, e) => s + e.transform.position.x, 0) / before.length
+    const czBefore = before.reduce((s, e) => s + e.transform.position.z, 0) / before.length
+
+    await page.locator('[data-tour-id="multi-rotate"]').click()
+    await page.waitForTimeout(SETTLE_MS)
+    await page.screenshot({ path: 'tests/artifacts/placement-rotate-centroid.png', fullPage: false })
+
+    const after = await getEntities(page, ids)
+    const cxAfter = after.reduce((s, e) => s + e.transform.position.x, 0) / after.length
+    const czAfter = after.reduce((s, e) => s + e.transform.position.z, 0) / after.length
+    expect(Math.abs(cxAfter - cxBefore)).toBeLessThan(0.001)
+    expect(Math.abs(czAfter - czBefore)).toBeLessThan(0.001)
+    // Verify it actually rotated — at least one entity must have moved.
+    let moved = 0
+    for (let i = 0; i < before.length; i++) {
+      const dx = after[i].transform.position.x - before[i].transform.position.x
+      const dz = after[i].transform.position.z - before[i].transform.position.z
+      if (Math.hypot(dx, dz) > 0.01) moved++
+    }
+    expect(moved, 'rotate should move at least 2 of 3 entities').toBeGreaterThanOrEqual(2)
+  } finally {
+    await deleteEntities(request, gardenId, ids)
+  }
+})
+
+test('selecting an entity adds outline pixels to the rendered scene', async ({
+  page,
+  request,
+}) => {
+  await loadAppAndWait(page)
+  const gardenId = await getGardenId(page)
+  const ids: string[] = []
+  try {
+    // Single bed at origin so the outline contribution is comparable
+    // run-to-run regardless of the camera angle.
+    ids.push(await createBed(request, gardenId, { position: { x: 0, y: 0, z: 0 } }))
+    await waitForEntitiesPresent(page, ids)
+    // Make sure nothing is selected.
+    await selectIds(page, [])
+    await page.waitForTimeout(SETTLE_MS)
+    const beforeShot = await page.screenshot({
+      path: 'tests/artifacts/placement-outline-before.png',
+      fullPage: false,
+    })
+
+    // Now select.
+    await selectIds(page, ids)
+    await page.waitForTimeout(SETTLE_MS)
+    const afterShot = await page.screenshot({
+      path: 'tests/artifacts/placement-outline-after.png',
+      fullPage: false,
+    })
+
+    // Outline adds bright cyan/orange pixels — the PNG byte size grows by
+    // a noticeable amount when those rendered pixels appear. Threshold is
+    // generous (1KB) since the outline is a small fraction of the frame
+    // but still well above PNG compression noise (~100B run-to-run).
+    const delta = afterShot.length - beforeShot.length
+    expect(
+      Math.abs(delta),
+      `before=${beforeShot.length}B after=${afterShot.length}B delta=${delta}B — outline should change pixel count`,
+    ).toBeGreaterThan(1000)
+  } finally {
+    await deleteEntities(request, gardenId, ids)
+  }
+})
+
+test('snap mode persists across a hard reload', async ({ page }) => {
+  await loadAppAndWait(page)
+  // Force snap mode = center, distinct from the default (edge).
+  await page.evaluate(() => {
+    const store = (window as unknown as { __openharvestStore?: { getState: () => { setSnapMode: (m: 'edge' | 'center') => void } } })
+      .__openharvestStore
+    store?.getState().setSnapMode('center')
+  })
+  // Verify it stuck before the reload.
+  let mode = await page.evaluate(() => {
+    const store = (window as unknown as { __openharvestStore?: { getState: () => { snapMode: 'edge' | 'center' } } })
+      .__openharvestStore
+    return store?.getState().snapMode
+  })
+  expect(mode).toBe('center')
+
+  // Hard reload — re-runs main.tsx, re-initializes the store from
+  // localStorage. If the persistence write didn't go through (or read on
+  // init forgot snapMode), the reloaded store falls back to 'edge'.
+  await page.reload()
+  await page.waitForSelector('canvas')
+  await page.waitForTimeout(2000)
+  mode = await page.evaluate(() => {
+    const store = (window as unknown as { __openharvestStore?: { getState: () => { snapMode: 'edge' | 'center' } } })
+      .__openharvestStore
+    return store?.getState().snapMode
+  })
+  expect(mode).toBe('center')
+
+  // Restore default for next test.
+  await page.evaluate(() => {
+    const store = (window as unknown as { __openharvestStore?: { getState: () => { setSnapMode: (m: 'edge' | 'center') => void } } })
+      .__openharvestStore
+    store?.getState().setSnapMode('edge')
+  })
 })
