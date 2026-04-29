@@ -59,12 +59,13 @@
  * default — looking down +Y, +Z points "down" on the screen). The icons are
  * suggestive, not strict, so we annotate the tooltips.
  */
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { ApiError, createEntity, deleteEntity, updateEntity } from '../api/client'
 import type { CreateEntityRequest, GardenEntity, Quaternion } from '../api/types'
 import { useGarden } from '../store/garden'
 import { formatLength, parseLength } from '../store/unitsHelpers'
+import NudgePad from './NudgePad'
 import { useButtonDragHandle } from './useButtonDragHandle'
 
 const PILL_STYLE: React.CSSProperties = {
@@ -179,14 +180,26 @@ const ARRANGE_PANEL_STYLE: React.CSSProperties = {
   flexDirection: 'column',
   gap: 6,
   padding: '8px 10px',
-  background: 'rgba(20, 22, 24, 0.94)',
-  border: '1px solid #4ec9ff',
+  // Translucent so the user can see the live ghost-preview of the layout
+  // through the panel as they drag sliders. Backdrop blur keeps text
+  // readable against busy backgrounds.
+  background: 'rgba(20, 22, 24, 0.55)',
+  backdropFilter: 'blur(6px)',
+  WebkitBackdropFilter: 'blur(6px)',
+  border: '1px solid rgba(78, 201, 255, 0.7)',
   borderRadius: 8,
   fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
   fontSize: 11,
   color: '#e5e5e5',
   pointerEvents: 'auto',
-  minWidth: 260,
+  minWidth: 280,
+  boxShadow: '0 4px 14px rgba(0,0,0,0.5)',
+}
+
+const SLIDER_STYLE: React.CSSProperties = {
+  flex: 2,
+  cursor: 'pointer',
+  accentColor: '#4ec9ff',
 }
 
 const TAB_ROW_STYLE: React.CSSProperties = {
@@ -397,19 +410,62 @@ export default function MultiSelectInspector() {
   const [busy, setBusy] = useState(false)
   const [arrangeOpen, setArrangeOpen] = useState(false)
   const [arrangeMode, setArrangeMode] = useState<'grid' | 'ring'>('grid')
-  // Grid inputs are draft strings (so the user can type "5'0\"" or "1.5") and
-  // only get parsed on Apply. cols is a separate integer draft.
-  const [colsDraft, setColsDraft] = useState('')
-  const [gapXDraft, setGapXDraft] = useState('')
-  const [gapZDraft, setGapZDraft] = useState('')
-  const [radiusDraft, setRadiusDraft] = useState('')
-  const [startAngleDraft, setStartAngleDraft] = useState('0')
+  // Each numeric input is paired with a text draft. The meters/integer
+  // values drive the live preview AND the slider position; the text drafts
+  // give the user free-form imperial / metric typing. Slider movement
+  // updates both. Text edits update the draft on every keystroke and the
+  // canonical value only when the parse succeeds.
+  const [cols, setCols] = useState(1)
+  const [gapXm, setGapXm] = useState(0.5)
+  const [gapZm, setGapZm] = useState(0.5)
+  const [radiusM, setRadiusM] = useState(1)
+  const [startAngleDeg, setStartAngleDeg] = useState(0)
+  const [colsText, setColsText] = useState('1')
+  const [gapXText, setGapXText] = useState('')
+  const [gapZText, setGapZText] = useState('')
+  const [radiusText, setRadiusText] = useState('')
+  const [angleText, setAngleText] = useState('0')
+  // Snapshot of every primary's pre-arrange state. We layout from this so
+  // the centroid doesn't drift as the user adjusts inputs (each preview
+  // applies to the snapshot, not to the already-previewed positions).
+  // Restored on Cancel or precondition loss; cleared on Apply success.
+  const snapshotRef = useRef<Record<string, GardenEntity> | null>(null)
 
-  // Reset transient UI state when the selection changes.
+  // Reset transient UI state when the selection changes. If an arrange
+  // preview was in progress, restore every entity from the snapshot — the
+  // store still holds preview positions for the original selection's
+  // entities even after they were deselected, so without this they'd be
+  // stuck in the previewed layout.
   useEffect(() => {
     setConfirmingDelete(false)
+    if (snapshotRef.current) {
+      const store = useGarden.getState()
+      for (const id of Object.keys(snapshotRef.current)) {
+        store.addOrUpdateEntity(snapshotRef.current[id])
+      }
+      snapshotRef.current = null
+    }
     setArrangeOpen(false)
   }, [selectedIds])
+
+  // Esc cancels an in-progress arrange preview (restoring the snapshot).
+  useEffect(() => {
+    if (!arrangeOpen) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (snapshotRef.current) {
+          const store = useGarden.getState()
+          for (const id of Object.keys(snapshotRef.current)) {
+            store.addOrUpdateEntity(snapshotRef.current[id])
+          }
+          snapshotRef.current = null
+        }
+        setArrangeOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [arrangeOpen])
 
   // Esc cancels group-translate mode. Selection is left intact (Esc clearing
   // selection itself is a separate decision; user may want to keep picks).
@@ -450,7 +506,10 @@ export default function MultiSelectInspector() {
     const snap = useGarden.getState().snap ?? 0.5
     const n = selected.length
     if (n === 0) return { cols: 1, gap: snap, radius: snap * 2 }
-    const cols = Math.max(1, Math.round(Math.sqrt(n)))
+    // Small selections (≤4) default to a single row — for 2 beds the
+    // "rows × cols" framing felt absurd to the user. Larger selections get
+    // the roughly-square √N layout.
+    const cols = n <= 4 ? n : Math.max(1, Math.round(Math.sqrt(n)))
     let minX = Infinity,
       maxX = -Infinity,
       minZ = Infinity,
@@ -466,15 +525,164 @@ export default function MultiSelectInspector() {
     return { cols, gap: snap, radius: Math.max(extent / 2, snap * 2) }
   }, [selected])
 
-  // Seed arrange-panel inputs when the panel opens. Also above the early
-  // return for the same hook-stability reason as arrangeDefaults.
+  // When the panel opens, snapshot the current selection and seed every
+  // input from the computed defaults. The snapshot is the layout origin
+  // for live preview — Cancel restores from it, Apply discards it. Above
+  // the early return so the hook count stays stable.
   useEffect(() => {
     if (!arrangeOpen) return
-    setColsDraft(String(arrangeDefaults.cols))
-    setGapXDraft(formatLength(arrangeDefaults.gap, units))
-    setGapZDraft(formatLength(arrangeDefaults.gap, units))
-    setRadiusDraft(formatLength(arrangeDefaults.radius, units))
-  }, [arrangeOpen, arrangeDefaults, units])
+    const s = useGarden.getState()
+    const snap: Record<string, GardenEntity> = {}
+    for (const id of s.primarySelectedIds) {
+      const e = s.entities[id]
+      if (e) snap[id] = JSON.parse(JSON.stringify(e)) as GardenEntity
+    }
+    snapshotRef.current = snap
+    setCols(arrangeDefaults.cols)
+    setColsText(String(arrangeDefaults.cols))
+    setGapXm(arrangeDefaults.gap)
+    setGapZm(arrangeDefaults.gap)
+    setRadiusM(arrangeDefaults.radius)
+    setStartAngleDeg(0)
+    setGapXText(formatLength(arrangeDefaults.gap, units))
+    setGapZText(formatLength(arrangeDefaults.gap, units))
+    setRadiusText(formatLength(arrangeDefaults.radius, units))
+    setAngleText('0')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arrangeOpen])
+
+  // When the user flips units while the panel is open, re-format the text
+  // drafts so they show the new system. Keep the underlying meters values
+  // unchanged.
+  useEffect(() => {
+    if (!arrangeOpen) return
+    setGapXText(formatLength(gapXm, units))
+    setGapZText(formatLength(gapZm, units))
+    setRadiusText(formatLength(radiusM, units))
+  }, [units, arrangeOpen, gapXm, gapZm, radiusM])
+
+  // Live preview — recompute layout from the SNAPSHOT on every input
+  // change and apply optimistically to the local store. No PATCH yet; the
+  // user sees the preview update in real time as they drag a slider or
+  // type a value. Apply commits via PATCH; Cancel restores from snapshot.
+  useEffect(() => {
+    if (!arrangeOpen) return
+    const snap = snapshotRef.current
+    if (!snap) return
+    const ids = Object.keys(snap)
+    if (ids.length === 0) return
+    const entitiesArr = ids.map((id) => snap[id])
+    let cx = 0,
+      cz = 0
+    for (const e of entitiesArr) {
+      cx += e.transform.position.x
+      cz += e.transform.position.z
+    }
+    cx /= entitiesArr.length
+    cz /= entitiesArr.length
+    let layout: GardenEntity[]
+    if (arrangeMode === 'grid') {
+      const totalCols = Math.max(1, Math.min(cols, entitiesArr.length))
+      const totalRows = Math.ceil(entitiesArr.length / totalCols)
+      const gridWidth = (totalCols - 1) * gapXm
+      const gridHeight = (totalRows - 1) * gapZm
+      const x0 = cx - gridWidth / 2
+      const z0 = cz - gridHeight / 2
+      layout = entitiesArr.map((e, i) => {
+        const col = i % totalCols
+        const row = Math.floor(i / totalCols)
+        return {
+          ...e,
+          transform: {
+            ...e.transform,
+            position: { x: x0 + col * gapXm, y: e.transform.position.y, z: z0 + row * gapZm },
+          },
+        }
+      })
+    } else {
+      const startRad = (startAngleDeg * Math.PI) / 180
+      const step = (2 * Math.PI) / entitiesArr.length
+      layout = entitiesArr.map((e, i) => {
+        const angle = startRad + i * step
+        return {
+          ...e,
+          transform: {
+            ...e.transform,
+            position: {
+              x: cx + radiusM * Math.cos(angle),
+              y: e.transform.position.y,
+              z: cz + radiusM * Math.sin(angle),
+            },
+          },
+        }
+      })
+    }
+    const store = useGarden.getState()
+    for (const e of layout) store.addOrUpdateEntity(e)
+  }, [arrangeOpen, arrangeMode, cols, gapXm, gapZm, radiusM, startAngleDeg])
+
+  // Group keyboard nudge — arrow keys translate every primary by one snap
+  // step on world XZ when 2+ are selected. Mirrors InspectorCard's
+  // single-entity nudge so desktop fine-tune works the same way regardless
+  // of selection size. Above the early return to keep hook count stable.
+  useEffect(() => {
+    const NUDGE_FALLBACK_M = 0.1
+    const handler = (e: KeyboardEvent) => {
+      if (
+        e.key !== 'ArrowUp' &&
+        e.key !== 'ArrowDown' &&
+        e.key !== 'ArrowLeft' &&
+        e.key !== 'ArrowRight'
+      )
+        return
+      const target = e.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      )
+        return
+      const s = useGarden.getState()
+      if (s.primarySelectedIds.length < 2 || !s.currentGardenId) return
+      const step = s.snap ?? NUDGE_FALLBACK_M
+      const dx = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0
+      const dz = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
+      e.preventDefault()
+      const next: GardenEntity[] = s.primarySelectedIds
+        .map((id) => s.entities[id])
+        .filter((ent): ent is GardenEntity => !!ent)
+        .map((ent) => ({
+          ...ent,
+          transform: {
+            ...ent.transform,
+            position: {
+              x: ent.transform.position.x + dx * step,
+              y: ent.transform.position.y,
+              z: ent.transform.position.z + dz * step,
+            },
+          },
+        }))
+      // Optimistic local update + parallel PATCH. Reuse the same pattern as
+      // applyOptimisticPatch but inline so it can run from this effect's
+      // closure without depending on the not-yet-defined helper.
+      const gid = s.currentGardenId
+      for (const ent of next) s.addOrUpdateEntity(ent)
+      void Promise.all(
+        next.map((ent) =>
+          updateEntity(gid, ent.id, { transform: ent.transform }).then(
+            (server) => useGarden.getState().addOrUpdateEntity(server),
+            (err) => {
+              console.error('[MultiSelectInspector] keyboard nudge failed', err)
+              useGarden.getState().setToast('Nudge failed')
+            },
+          ),
+        ),
+      )
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   if (selected.length < 2 || !gardenId) return null
 
@@ -709,6 +917,28 @@ export default function MultiSelectInspector() {
   }
 
   // -------------------------------------------------------------------------
+  // Group fine-tune nudge — translates every primary by one snap step on
+  // world XZ. Backed by the standard mass-PATCH helper so partial failures
+  // revert the whole batch.
+  // -------------------------------------------------------------------------
+  const NUDGE_FALLBACK_M = 0.1
+  const snapStep = useGarden.getState().snap ?? NUDGE_FALLBACK_M
+  const nudgeBy = (dx: number, dz: number) => {
+    const next: GardenEntity[] = selected.map((e) => ({
+      ...e,
+      transform: {
+        ...e.transform,
+        position: {
+          x: e.transform.position.x + dx * snapStep,
+          y: e.transform.position.y,
+          z: e.transform.position.z + dz * snapStep,
+        },
+      },
+    }))
+    void applyOptimisticPatch(next)
+  }
+
+  // -------------------------------------------------------------------------
   // Arrange — cartesian grid + polar ring layout helpers.
   //
   // Both place primaries in *selection order* (the order they were tapped),
@@ -723,81 +953,65 @@ export default function MultiSelectInspector() {
   // useMemo / seed-useEffect that drive these defaults moved above the
   // early return — see notes there.
   // -------------------------------------------------------------------------
-  const onArrangeGrid = async (
-    cols: number,
-    gapX: number,
-    gapZ: number,
-  ): Promise<MassOpResult> => {
-    const n = selected.length
-    const totalCols = Math.max(1, Math.min(cols, n))
-    const totalRows = Math.ceil(n / totalCols)
-    const gridWidth = (totalCols - 1) * gapX
-    const gridHeight = (totalRows - 1) * gapZ
-    const x0 = centroid.x - gridWidth / 2
-    const z0 = centroid.z - gridHeight / 2
-    const next: GardenEntity[] = selected.map((e, i) => {
-      const col = i % totalCols
-      const row = Math.floor(i / totalCols)
-      return {
-        ...e,
-        transform: {
-          ...e.transform,
-          position: {
-            x: x0 + col * gapX,
-            y: e.transform.position.y,
-            z: z0 + row * gapZ,
-          },
-        },
-      }
-    })
-    return applyOptimisticPatch(next)
-  }
-
-  const onArrangeRing = async (
-    radius: number,
-    startAngleDeg: number,
-  ): Promise<MassOpResult> => {
-    const n = selected.length
-    const startRad = (startAngleDeg * Math.PI) / 180
-    const step = (2 * Math.PI) / n
-    const next: GardenEntity[] = selected.map((e, i) => {
-      const angle = startRad + i * step
-      return {
-        ...e,
-        transform: {
-          ...e.transform,
-          position: {
-            x: centroid.x + radius * Math.cos(angle),
-            y: e.transform.position.y,
-            z: centroid.z + radius * Math.sin(angle),
-          },
-        },
-      }
-    })
-    return applyOptimisticPatch(next)
-  }
-
+  // Apply commits the live preview — local entities already sit at the
+  // previewed positions, we just send the PATCH for each one. On success
+  // the snapshot is dropped so reopening the panel captures fresh state.
+  // On failure we restore from the snapshot via onArrangeCancel so the
+  // user isn't stuck with half-applied positions.
   const onArrangeApply = async () => {
-    if (arrangeMode === 'grid') {
-      const cols = parseInt(colsDraft, 10)
-      const gapX = parseLength(gapXDraft, units)
-      const gapZ = parseLength(gapZDraft, units)
-      if (!Number.isFinite(cols) || cols < 1 || gapX === null || gapZ === null) {
-        setToast('Arrange: cols, gap-x, and gap-z must all be valid')
-        return
+    const snap = snapshotRef.current
+    if (!snap) {
+      setArrangeOpen(false)
+      return
+    }
+    const ids = Object.keys(snap)
+    const s = useGarden.getState()
+    const current = ids
+      .map((id) => s.entities[id])
+      .filter((e): e is GardenEntity => !!e)
+    setBusy(true)
+    try {
+      await Promise.all(
+        current.map((e) =>
+          updateEntity(gardenId, e.id, { transform: e.transform }).then((server) =>
+            useGarden.getState().addOrUpdateEntity(server),
+          ),
+        ),
+      )
+      snapshotRef.current = null
+      setArrangeOpen(false)
+    } catch (err) {
+      const store = useGarden.getState()
+      for (const id of ids) {
+        const orig = snap[id]
+        if (orig) store.addOrUpdateEntity(orig)
       }
-      const result = await onArrangeGrid(cols, gapX, gapZ)
-      if (result.ok) setArrangeOpen(false)
-      return
+      const msg =
+        err instanceof ApiError
+          ? `Arrange apply failed (${err.status})`
+          : err instanceof Error
+            ? err.message
+            : 'Arrange apply failed'
+      setToast(msg)
+      console.error('[MultiSelectInspector] arrange apply failed', err)
+    } finally {
+      setBusy(false)
     }
-    const radius = parseLength(radiusDraft, units)
-    const startDeg = Number(startAngleDraft)
-    if (radius === null || radius <= 0 || !Number.isFinite(startDeg)) {
-      setToast('Arrange: radius must be > 0 and start-angle must be a number')
-      return
+  }
+
+  // Cancel restores every primary from the snapshot taken when the panel
+  // opened. Same handler runs when the user toggles the ▤ button off, hits
+  // Esc, or the precondition is lost (selection cleared mid-preview).
+  const onArrangeCancel = () => {
+    const snap = snapshotRef.current
+    if (snap) {
+      const store = useGarden.getState()
+      for (const id of Object.keys(snap)) {
+        store.addOrUpdateEntity(snap[id])
+      }
+      snapshotRef.current = null
     }
-    const result = await onArrangeRing(radius, startDeg)
-    if (result.ok) setArrangeOpen(false)
+    setArrangeOpen(false)
   }
 
   const canDistribute = selected.length >= 3
@@ -856,32 +1070,80 @@ export default function MultiSelectInspector() {
               <div data-tour-id="arrange-grid-cols" style={FIELD_ROW}>
                 <span style={FIELD_LABEL}>Cols</span>
                 <input
-                  style={FIELD_INPUT}
-                  inputMode="numeric"
-                  value={colsDraft}
-                  onChange={(e) => setColsDraft(e.target.value)}
-                  placeholder={String(arrangeDefaults.cols)}
+                  type="range"
+                  style={SLIDER_STYLE}
+                  min={1}
+                  max={Math.max(1, selected.length)}
+                  step={1}
+                  value={cols}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10)
+                    setCols(v)
+                    setColsText(String(v))
+                  }}
                 />
-                <span style={{ color: '#666', fontSize: 10, whiteSpace: 'nowrap' }}>
-                  → {Math.ceil(selected.length / Math.max(1, parseInt(colsDraft, 10) || arrangeDefaults.cols))} rows
+                <input
+                  style={{ ...FIELD_INPUT, flex: 'none', width: 44 }}
+                  inputMode="numeric"
+                  value={colsText}
+                  onChange={(e) => {
+                    setColsText(e.target.value)
+                    const v = parseInt(e.target.value, 10)
+                    if (Number.isFinite(v) && v >= 1 && v <= selected.length) setCols(v)
+                  }}
+                />
+                <span style={{ color: '#888', fontSize: 10, whiteSpace: 'nowrap' }}>
+                  × {Math.ceil(selected.length / Math.max(1, cols))} rows
                 </span>
               </div>
               <div data-tour-id="arrange-grid-gap-x" style={FIELD_ROW}>
                 <span style={FIELD_LABEL}>Gap X</span>
                 <input
-                  style={FIELD_INPUT}
-                  value={gapXDraft}
-                  onChange={(e) => setGapXDraft(e.target.value)}
-                  placeholder={formatLength(arrangeDefaults.gap, units)}
+                  type="range"
+                  style={SLIDER_STYLE}
+                  min={0}
+                  max={3}
+                  step={0.01}
+                  value={Math.min(gapXm, 3)}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value)
+                    setGapXm(v)
+                    setGapXText(formatLength(v, units))
+                  }}
+                />
+                <input
+                  style={{ ...FIELD_INPUT, flex: 'none', width: 70 }}
+                  value={gapXText}
+                  onChange={(e) => {
+                    setGapXText(e.target.value)
+                    const v = parseLength(e.target.value, units)
+                    if (v !== null && v >= 0) setGapXm(v)
+                  }}
                 />
               </div>
               <div data-tour-id="arrange-grid-gap-z" style={FIELD_ROW}>
                 <span style={FIELD_LABEL}>Gap Z</span>
                 <input
-                  style={FIELD_INPUT}
-                  value={gapZDraft}
-                  onChange={(e) => setGapZDraft(e.target.value)}
-                  placeholder={formatLength(arrangeDefaults.gap, units)}
+                  type="range"
+                  style={SLIDER_STYLE}
+                  min={0}
+                  max={3}
+                  step={0.01}
+                  value={Math.min(gapZm, 3)}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value)
+                    setGapZm(v)
+                    setGapZText(formatLength(v, units))
+                  }}
+                />
+                <input
+                  style={{ ...FIELD_INPUT, flex: 'none', width: 70 }}
+                  value={gapZText}
+                  onChange={(e) => {
+                    setGapZText(e.target.value)
+                    const v = parseLength(e.target.value, units)
+                    if (v !== null && v >= 0) setGapZm(v)
+                  }}
                 />
               </div>
             </>
@@ -890,29 +1152,61 @@ export default function MultiSelectInspector() {
               <div data-tour-id="arrange-ring-radius" style={FIELD_ROW}>
                 <span style={FIELD_LABEL}>Radius</span>
                 <input
-                  style={FIELD_INPUT}
-                  value={radiusDraft}
-                  onChange={(e) => setRadiusDraft(e.target.value)}
-                  placeholder={formatLength(arrangeDefaults.radius, units)}
+                  type="range"
+                  style={SLIDER_STYLE}
+                  min={0.05}
+                  max={Math.max(5, arrangeDefaults.radius * 2)}
+                  step={0.01}
+                  value={radiusM}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value)
+                    setRadiusM(v)
+                    setRadiusText(formatLength(v, units))
+                  }}
+                />
+                <input
+                  style={{ ...FIELD_INPUT, flex: 'none', width: 70 }}
+                  value={radiusText}
+                  onChange={(e) => {
+                    setRadiusText(e.target.value)
+                    const v = parseLength(e.target.value, units)
+                    if (v !== null && v > 0) setRadiusM(v)
+                  }}
                 />
               </div>
               <div data-tour-id="arrange-ring-start" style={FIELD_ROW}>
                 <span style={FIELD_LABEL}>Start °</span>
                 <input
-                  style={FIELD_INPUT}
-                  inputMode="decimal"
-                  value={startAngleDraft}
-                  onChange={(e) => setStartAngleDraft(e.target.value)}
-                  placeholder="0"
+                  type="range"
+                  style={SLIDER_STYLE}
+                  min={0}
+                  max={360}
+                  step={1}
+                  value={startAngleDeg}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10)
+                    setStartAngleDeg(v)
+                    setAngleText(String(v))
+                  }}
                 />
-                <span style={{ color: '#666', fontSize: 10, whiteSpace: 'nowrap' }}>
+                <input
+                  style={{ ...FIELD_INPUT, flex: 'none', width: 50 }}
+                  inputMode="decimal"
+                  value={angleText}
+                  onChange={(e) => {
+                    setAngleText(e.target.value)
+                    const v = parseFloat(e.target.value)
+                    if (Number.isFinite(v)) setStartAngleDeg(v)
+                  }}
+                />
+                <span style={{ color: '#888', fontSize: 10, whiteSpace: 'nowrap' }}>
                   step {(360 / Math.max(1, selected.length)).toFixed(1)}°
                 </span>
               </div>
             </>
           )}
           <div style={{ ...FIELD_ROW, marginTop: 2 }}>
-            <button style={CANCEL_BTN} onClick={() => setArrangeOpen(false)} disabled={busy}>
+            <button style={CANCEL_BTN} onClick={onArrangeCancel} disabled={busy}>
               Cancel
             </button>
             <button data-tour-id="arrange-apply" style={APPLY_BTN} onClick={onArrangeApply} disabled={busy}>
@@ -921,6 +1215,11 @@ export default function MultiSelectInspector() {
           </div>
         </div>
       )}
+      {/* Group nudge pad — same component InspectorCard uses for single-
+          entity fine-tune, but the callback translates every primary at
+          once. Sits just above the action pill so the fine-tune workflow
+          flows visually downward into the macro-op buttons. */}
+      <NudgePad step={snapStep} units={units} onNudge={nudgeBy} tourId="multi-nudge-pad" />
       <div style={PILL_STYLE}>
         <button
           data-tour-id="multi-rotate"
@@ -1072,12 +1371,12 @@ export default function MultiSelectInspector() {
                 ? ACTIVE_BUTTON
                 : ICON_BUTTON
           }
-          onClick={() => setArrangeOpen((v) => !v)}
+          onClick={() => (arrangeOpen ? onArrangeCancel() : setArrangeOpen(true))}
           disabled={buttonDisabled || levelLockedDisabled}
           title={
             levelLockedDisabled
               ? mixedTooltip
-              : 'Arrange in a grid or ring around the centroid'
+              : 'Arrange in a grid or ring around the centroid (live preview)'
           }
         >
           ▤
