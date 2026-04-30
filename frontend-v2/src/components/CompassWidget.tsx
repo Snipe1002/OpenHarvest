@@ -14,6 +14,7 @@
  */
 import { useEffect, useState } from 'react'
 import * as THREE from 'three'
+import { useGarden } from '../store/garden'
 import { getSceneRefs } from './r3fSceneBridge'
 
 const RADIUS = 32
@@ -29,10 +30,18 @@ const CONTAINER: React.CSSProperties = {
   width: SIZE,
   height: SIZE,
   zIndex: 11,
-  pointerEvents: 'none',
+  pointerEvents: 'auto',
   background: 'rgba(20, 22, 24, 0.78)',
   borderRadius: '50%',
   border: '1px solid #444',
+  cursor: 'pointer',
+  padding: 0,
+}
+
+const CONTAINER_ACTIVE: React.CSSProperties = {
+  ...CONTAINER,
+  borderColor: '#4ec9ff',
+  boxShadow: '0 0 12px rgba(78, 201, 255, 0.5)',
 }
 
 interface Arrows {
@@ -66,6 +75,8 @@ function projectAxis(world: THREE.Vector3, viewMatrix: THREE.Matrix4): { dx: num
 }
 
 export default function CompassWidget() {
+  const menuHubOpen = useGarden((s) => s.menuHubOpen)
+  const setMenuHubOpen = useGarden((s) => s.setMenuHubOpen)
   const [arrows, setArrows] = useState<Arrows>({
     x: { dx: RADIUS, dy: 0 },
     y: { dx: 0, dy: -RADIUS },
@@ -95,7 +106,13 @@ export default function CompassWidget() {
   const cx = SIZE / 2
   const cy = SIZE / 2
   return (
-    <div style={CONTAINER}>
+    <button
+      type="button"
+      style={menuHubOpen ? CONTAINER_ACTIVE : CONTAINER}
+      onClick={() => setMenuHubOpen(!menuHubOpen)}
+      title="Tap to summon the HUD menu — show / hide individual panels"
+      data-tour-id="compass"
+    >
       <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
         <defs>
           <marker id="arr-x" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
@@ -174,6 +191,6 @@ export default function CompassWidget() {
           Z
         </text>
       </svg>
-    </div>
+    </button>
   )
 }

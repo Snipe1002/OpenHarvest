@@ -8,6 +8,7 @@ import type { GardenEntity, Guid } from './api/types'
 import { createDoorOnWall, createWindowOnWall } from './components/houseHelpers'
 import ArrangeAnchor from './components/ArrangeAnchor'
 import CompassWidget from './components/CompassWidget'
+import HUDMenuHub from './components/HUDMenuHub'
 import HUDToggle from './components/HUDToggle'
 import InspectorCard from './components/InspectorCard'
 import LabelsChip from './components/LabelsChip'
@@ -73,6 +74,10 @@ export default function App() {
   // can see the scene unobstructed. The HUDToggle button + CompassWidget
   // stay visible so the user can re-summon the rest.
   const hudCollapsed = useGarden((s) => s.hudCollapsed)
+  // Per-panel visibility — orthogonal to the master `hudCollapsed`
+  // toggle. The HUDMenuHub (summoned by tapping the compass) lets the
+  // user hide individual pieces.
+  const panelVisibility = useGarden((s) => s.panelVisibility)
 
   useEffect(() => {
     let cancelled = false
@@ -264,20 +269,25 @@ export default function App() {
           sit at top:152, well below the chip column). */}
       {!hudCollapsed && (
         <>
-          <SnapChip />
-          <StickyChip />
-          <MultiChip />
-          <UnitsChip />
-          <LabelsChip />
-          <InspectorCard />
-          <MainToolbar />
-          <MultiSelectInspector />
+          {panelVisibility.chips && (
+            <>
+              <SnapChip />
+              <StickyChip />
+              <MultiChip />
+              <UnitsChip />
+              <LabelsChip />
+            </>
+          )}
+          {panelVisibility.inspector && <InspectorCard />}
+          {panelVisibility.mainToolbar && <MainToolbar />}
+          {panelVisibility.multiInspector && <MultiSelectInspector />}
           <TranslateStatusPill />
         </>
       )}
       <ToastBar />
       <HUDToggle />
       <CompassWidget />
+      <HUDMenuHub />
       <TourSystem />
     </div>
   )
