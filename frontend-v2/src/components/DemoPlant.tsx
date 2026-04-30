@@ -125,11 +125,11 @@ export default function DemoPlant({ entity, children }: DemoPlantProps) {
     : isMultiSelected
       ? '#4ec9ff'
       : '#ffaa00'
-  // Halo uses the same approach as DemoBed — a slightly-larger additive
-  // box around the plant. Padding scaled to plant size so it reads as a
-  // glow without looking grossly oversized.
-  const haloPad = isExtension ? 0.02 : 0.04
-  const haloOpacity = isExtension ? 0.18 : 0.35
+  // Halo around the plant — see DemoBed comment for the rationale on the
+  // tight pad / no-additive choice. Plants are tiny so the pad is even
+  // smaller than the bed's.
+  const haloPad = isExtension ? 0.01 : 0.02
+  const haloOpacity = isExtension ? 0.4 : 0.65
   const haloW = leafSize + haloPad
   const haloH = stemHeight + haloPad
   const haloL = leafSize + haloPad

@@ -682,6 +682,51 @@ test('arrange grid edge mode honors world-aligned bounds for rotated beds', asyn
   }
 })
 
+test('spread X pushes every primary 25% farther from the X centroid', async ({
+  page,
+  request,
+}) => {
+  // Inverse-of-distribute regression guard. With 3 beds at known X
+  // positions, spread X should multiply each (x − cx) by 1.25 while
+  // keeping the centroid fixed.
+  await loadAppAndWait(page)
+  const gardenId = await getGardenId(page)
+  const ids: string[] = []
+  try {
+    ids.push(await createBed(request, gardenId, { position: { x: -2, y: 0, z: 0 } }))
+    ids.push(await createBed(request, gardenId, { position: { x: 0, y: 0, z: 0 } }))
+    ids.push(await createBed(request, gardenId, { position: { x: 2, y: 0, z: 0 } }))
+    await waitForEntitiesPresent(page, ids)
+    await selectIds(page, ids)
+
+    const before = await getEntities(page, ids)
+    const cxBefore = before.reduce((s, e) => s + e.transform.position.x, 0) / before.length
+
+    await page.locator('[data-tour-id="multi-spread-x"]').click()
+    await page.waitForTimeout(SETTLE_MS)
+    await page.screenshot({ path: 'tests/artifacts/placement-spread-x.png', fullPage: false })
+
+    const after = await getEntities(page, ids)
+    const cxAfter = after.reduce((s, e) => s + e.transform.position.x, 0) / after.length
+    // Centroid stays fixed.
+    expect(Math.abs(cxAfter - cxBefore)).toBeLessThan(0.001)
+    // Each entity's x-distance from the centroid grew by exactly 25%.
+    for (let i = 0; i < before.length; i++) {
+      const dxBefore = before[i].transform.position.x - cxBefore
+      const dxAfter = after[i].transform.position.x - cxAfter
+      const expected = dxBefore * 1.25
+      expect(
+        Math.abs(dxAfter - expected),
+        `entity ${i} dx_before=${dxBefore} → dx_after=${dxAfter}, expected ${expected}`,
+      ).toBeLessThan(0.001)
+      // Cross axis (Z) preserved.
+      expect(after[i].transform.position.z).toBeCloseTo(before[i].transform.position.z, 5)
+    }
+  } finally {
+    await deleteEntities(request, gardenId, ids)
+  }
+})
+
 test('snap mode persists across a hard reload', async ({ page }) => {
   await loadAppAndWait(page)
   // Force snap mode = center, distinct from the default (edge).

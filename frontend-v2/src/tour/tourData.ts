@@ -211,6 +211,16 @@ export const TOURS: Tour[] = [
         body: 'Same idea on Z. Needs 3+ entities.',
       },
       {
+        target: 'multi-spread-x',
+        title: 'Spread X',
+        body: 'Inverse of distribute — pushes every primary 25% farther from the X centroid. Tap repeatedly to spread out more. Cross axis is preserved.',
+      },
+      {
+        target: 'multi-spread-z',
+        title: 'Spread Z',
+        body: 'Same idea on Z. Tap repeatedly to keep pushing apart.',
+      },
+      {
         target: 'multi-align-l',
         title: 'Align Left (min X)',
         body: 'Snap every primary to the smallest X in the selection. Pairs with Align Right.',
