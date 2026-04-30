@@ -6,6 +6,7 @@ import DemoGround from './components/DemoGround'
 import EntityRenderer from './components/EntityRenderer'
 import type { GardenEntity, Guid } from './api/types'
 import { createDoorOnWall, createWindowOnWall } from './components/houseHelpers'
+import ArrangeAnchor from './components/ArrangeAnchor'
 import CompassWidget from './components/CompassWidget'
 import HUDToggle from './components/HUDToggle'
 import InspectorCard from './components/InspectorCard'
@@ -251,6 +252,10 @@ export default function App() {
             ghost beds during configuring, and the inline grid-tweak popover.
             Pointer pipeline lives on DemoGround.tsx. */}
         <RegionPaint />
+        {/* Arrange-wizard flag-pole anchor — shows up only while the
+            multi-select arrange panel is open; drag to relocate the
+            layout origin in 3D. */}
+        <ArrangeAnchor />
       </Viewer>
       {/* HTML overlays — siblings of the Viewer canvas. The four chips
           (Snap, Sticky, Multi, Units) stack vertically in a top-left

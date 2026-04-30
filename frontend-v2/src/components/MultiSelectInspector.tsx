@@ -407,6 +407,10 @@ export default function MultiSelectInspector() {
   const units = useGarden((s) => s.units)
   const showLabels = useGarden((s) => s.showButtonLabels)
   const snapMode = useGarden((s) => s.snapMode)
+  // Anchor — overrides the centroid as the layout origin while the
+  // arrange wizard is open. Set by ArrangeAnchor (drag-the-flag-pole) or
+  // remains null in which case we fall back to the snapshot centroid.
+  const arrangeAnchor = useGarden((s) => s.arrangeAnchor)
 
   const selected: GardenEntity[] = useMemo(() => {
     const out: GardenEntity[] = []
@@ -573,9 +577,14 @@ export default function MultiSelectInspector() {
       // Clear the ghost flag when the panel closes — Apply, Cancel, Esc,
       // and selection-loss all set arrangeOpen=false.
       useGarden.getState().setArrangePreviewActive(false)
+      // Drop the anchor too so reopening for a different selection
+      // starts at that selection's centroid instead of the previous run's
+      // dragged position.
+      useGarden.getState().setArrangeAnchor(null)
       return
     }
     useGarden.getState().setArrangePreviewActive(true)
+    useGarden.getState().setArrangeAnchor(null)
     const s = useGarden.getState()
     const snap: Record<string, GardenEntity> = {}
     for (const id of s.primarySelectedIds) {
@@ -617,14 +626,23 @@ export default function MultiSelectInspector() {
     const ids = Object.keys(snap)
     if (ids.length === 0) return
     const entitiesArr = ids.map((id) => snap[id])
+    // Layout origin: prefer the user's draggable anchor; fall back to
+    // the snapshot centroid. The anchor lets the user pin the grid /
+    // ring at a specific spot (e.g. the corner of an existing planter)
+    // instead of always centering on the selection.
     let cx = 0,
       cz = 0
-    for (const e of entitiesArr) {
-      cx += e.transform.position.x
-      cz += e.transform.position.z
+    if (arrangeAnchor) {
+      cx = arrangeAnchor.x
+      cz = arrangeAnchor.z
+    } else {
+      for (const e of entitiesArr) {
+        cx += e.transform.position.x
+        cz += e.transform.position.z
+      }
+      cx /= entitiesArr.length
+      cz /= entitiesArr.length
     }
-    cx /= entitiesArr.length
-    cz /= entitiesArr.length
     let layout: GardenEntity[]
     if (arrangeMode === 'grid') {
       const totalCols = Math.max(1, Math.min(cols, entitiesArr.length))
@@ -704,7 +722,7 @@ export default function MultiSelectInspector() {
     }
     const store = useGarden.getState()
     for (const e of layout) store.addOrUpdateEntity(e)
-  }, [arrangeOpen, arrangeMode, cols, gapXm, gapZm, radiusM, startAngleDeg, snapMode])
+  }, [arrangeOpen, arrangeMode, cols, gapXm, gapZm, radiusM, startAngleDeg, snapMode, arrangeAnchor])
 
   // Group keyboard nudge — arrow keys translate every primary by one snap
   // step on world XZ when 2+ are selected. Mirrors InspectorCard's
