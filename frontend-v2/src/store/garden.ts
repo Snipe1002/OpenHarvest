@@ -548,6 +548,14 @@ export interface GardenState {
   arrangePreviewActive: boolean
 
   /**
+   * World XZ position the arrange wizard uses as its layout origin while
+   * the panel is open. Defaults to the selection centroid; set to a
+   * specific point when the user drags the on-screen flag-pole anchor.
+   * Reset to null when the panel closes (Apply or Cancel).
+   */
+  arrangeAnchor: { x: number; z: number } | null
+
+  /**
    * Data-driven prefab catalog fetched once on app boot from
    * `GET /api/v1/prefabs`. Drives the prefab picker, default geometry, and
    * (in upcoming work) hierarchy / placement / AI rules. `null` while loading
@@ -633,6 +641,7 @@ export interface GardenState {
   setHudCollapsed: (v: boolean) => void
   setShowGrid: (v: boolean) => void
   setArrangePreviewActive: (v: boolean) => void
+  setArrangeAnchor: (v: { x: number; z: number } | null) => void
   /** Toggle / set multi-select mode, persist to localStorage. */
   setMultiSelectMode: (v: boolean) => void
   /**
@@ -676,6 +685,7 @@ export const useGarden = create<GardenState>((set, get) => ({
   hudCollapsed: false,
   showGrid: readPersistedGrid(),
   arrangePreviewActive: false,
+  arrangeAnchor: null,
   multiSelectMode: readPersistedMultiMode(),
   units: readPersistedUnits(),
   prefabCatalog: null,
@@ -944,6 +954,8 @@ export const useGarden = create<GardenState>((set, get) => ({
   },
 
   setArrangePreviewActive: (v) => set({ arrangePreviewActive: v }),
+
+  setArrangeAnchor: (v) => set({ arrangeAnchor: v }),
 
   setStickyPlacement: (v) => {
     writePersistedSticky(v)

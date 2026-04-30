@@ -727,6 +727,70 @@ test('spread X pushes every primary 25% farther from the X centroid', async ({
   }
 })
 
+test('arrange wizard repositions the layout around a custom anchor', async ({
+  page,
+  request,
+}) => {
+  // PR-B regression guard. Place 3 beds at known X positions, open the
+  // arrange grid panel, set arrangeAnchor explicitly via the store
+  // (simulating the user dragging the on-screen flag pole), assert the
+  // live preview centers the row around the anchor instead of the
+  // selection centroid.
+  await loadAppAndWait(page)
+  const gardenId = await getGardenId(page)
+  const ids: string[] = []
+  try {
+    ids.push(await createBed(request, gardenId, { position: { x: 0, y: 0, z: 0 } }))
+    ids.push(await createBed(request, gardenId, { position: { x: 1, y: 0, z: 0 } }))
+    ids.push(await createBed(request, gardenId, { position: { x: 2, y: 0, z: 0 } }))
+    await waitForEntitiesPresent(page, ids)
+    await selectIds(page, ids)
+
+    await page.locator('[data-tour-id="multi-arrange"]').click()
+    await page.waitForTimeout(500)
+    // Set a known anchor 10m away from the selection centroid (which is
+    // at x=1, z=0). The grid should now be centered at (15, 0) and the
+    // beds should fall around it.
+    const ANCHOR_X = 15
+    const ANCHOR_Z = 7
+    await page.evaluate(
+      ([ax, az]) => {
+        const store = (window as unknown as { __openharvestStore?: { getState: () => { setArrangeAnchor: (v: { x: number; z: number } | null) => void } } })
+          .__openharvestStore
+        store?.getState().setArrangeAnchor({ x: ax, z: az })
+      },
+      [ANCHOR_X, ANCHOR_Z],
+    )
+    await page.waitForTimeout(400)
+    await page.screenshot({ path: 'tests/artifacts/placement-anchor.png', fullPage: false })
+
+    // The 3 beds default to a single row (cols = 3 for ≤4 entities).
+    // Their centroid after arrangement should match the anchor exactly.
+    const entities = await getEntities(page, ids)
+    let cxAfter = 0
+    let czAfter = 0
+    for (const e of entities) {
+      cxAfter += e.transform.position.x
+      czAfter += e.transform.position.z
+    }
+    cxAfter /= entities.length
+    czAfter /= entities.length
+    expect(Math.abs(cxAfter - ANCHOR_X)).toBeLessThan(0.05)
+    expect(Math.abs(czAfter - ANCHOR_Z)).toBeLessThan(0.05)
+
+    // Cancel restores beds to their original positions even though the
+    // anchor moved them in preview.
+    await page.locator('button:has-text("Cancel")').click()
+    await page.waitForTimeout(SETTLE_MS)
+    const restored = await getEntities(page, ids)
+    expect(Math.abs(restored[0].transform.position.x - 0)).toBeLessThan(0.001)
+    expect(Math.abs(restored[1].transform.position.x - 1)).toBeLessThan(0.001)
+    expect(Math.abs(restored[2].transform.position.x - 2)).toBeLessThan(0.001)
+  } finally {
+    await deleteEntities(request, gardenId, ids)
+  }
+})
+
 test('snap mode persists across a hard reload', async ({ page }) => {
   await loadAppAndWait(page)
   // Force snap mode = center, distinct from the default (edge).
