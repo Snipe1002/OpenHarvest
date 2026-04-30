@@ -563,20 +563,12 @@ export interface GardenState {
   showButtonLabels: boolean
 
   /**
-   * When true, every HUD chip / toolbar / inspector is hidden — the only
-   * thing remaining on top of the canvas is the corner HUDToggle button
-   * (so the user can re-summon everything) and the compass widget. Lets
-   * the user see the scene without the HUD eating ~⅓ of the viewport.
-   * Session-only — defaults false on every load.
-   */
-  hudCollapsed: boolean
-
-  /**
-   * Per-panel visibility flags — orthogonal to `hudCollapsed`. A panel
-   * renders only when both `!hudCollapsed` AND its own flag is true. The
-   * menu hub (summoned by tapping the compass) toggles individual flags;
-   * the HUDToggle ⊞ button toggles `hudCollapsed`. Persisted to
-   * localStorage so the operator's layout choices survive reloads.
+   * Per-panel visibility flags — single source of truth for what's
+   * showing on the HUD. The HUDToggle ⊞ button and the menu-hub Show
+   * all / Hide all shortcuts both call `setAllPanelsVisible`, so the
+   * two surfaces stay in sync (PR-E unified them — see commit log).
+   * Persisted to localStorage so the operator's layout choices survive
+   * reloads.
    */
   panelVisibility: Record<PanelId, boolean>
 
@@ -585,6 +577,21 @@ export interface GardenState {
    * showing the per-panel toggles. Session-only.
    */
   menuHubOpen: boolean
+
+  /**
+   * World-space target for the camera's orbit pivot. When non-null, App.tsx
+   * calls `setTarget(x, y, z)` on the drei CameraControls so panning /
+   * dragging rotates around that point instead of the world origin. Lets
+   * the user "focus" the camera on a specific bed or corner before
+   * orbiting around it. Cleared (and target reset to the origin) when null.
+   */
+  cameraFocus: { x: number; y: number; z: number } | null
+
+  /**
+   * When true, the next ground click sets `cameraFocus` to the hit point.
+   * Toggled by the CameraFocusButton on the top-left rail. Session-only.
+   */
+  cameraFocusPicking: boolean
 
   /**
    * When true, render a foot-or-meter grid on the ground plane so the
@@ -693,11 +700,12 @@ export interface GardenState {
   /** Toggle / set sticky placement, persist to localStorage. */
   setStickyPlacement: (v: boolean) => void
   setShowButtonLabels: (v: boolean) => void
-  setHudCollapsed: (v: boolean) => void
   setShowGrid: (v: boolean) => void
   setPanelVisibility: (id: PanelId, v: boolean) => void
   setAllPanelsVisible: (v: boolean) => void
   setMenuHubOpen: (v: boolean) => void
+  setCameraFocus: (v: { x: number; y: number; z: number } | null) => void
+  setCameraFocusPicking: (v: boolean) => void
   setArrangePreviewActive: (v: boolean) => void
   setArrangeAnchor: (v: { x: number; z: number } | null) => void
   /** Toggle / set multi-select mode, persist to localStorage. */
@@ -740,10 +748,11 @@ export const useGarden = create<GardenState>((set, get) => ({
   selectedWallId: null,
   stickyPlacement: readPersistedSticky(),
   showButtonLabels: readPersistedLabels(),
-  hudCollapsed: false,
   showGrid: readPersistedGrid(),
   panelVisibility: readPersistedPanelVisibility(),
   menuHubOpen: false,
+  cameraFocus: null,
+  cameraFocusPicking: false,
   arrangePreviewActive: false,
   arrangeAnchor: null,
   multiSelectMode: readPersistedMultiMode(),
@@ -1006,8 +1015,6 @@ export const useGarden = create<GardenState>((set, get) => ({
     set({ showButtonLabels: v })
   },
 
-  setHudCollapsed: (v) => set({ hudCollapsed: v }),
-
   setShowGrid: (v) => {
     writePersistedGrid(v)
     set({ showGrid: v })
@@ -1035,6 +1042,8 @@ export const useGarden = create<GardenState>((set, get) => ({
   },
 
   setMenuHubOpen: (v) => set({ menuHubOpen: v }),
+  setCameraFocus: (v) => set({ cameraFocus: v }),
+  setCameraFocusPicking: (v) => set({ cameraFocusPicking: v }),
 
   setArrangePreviewActive: (v) => set({ arrangePreviewActive: v }),
 

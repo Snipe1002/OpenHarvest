@@ -52,23 +52,29 @@ const ICON_BTN_ACTIVE: React.CSSProperties = {
 }
 
 export default function HUDToggle() {
-  const collapsed = useGarden((s) => s.hudCollapsed)
-  const setCollapsed = useGarden((s) => s.setHudCollapsed)
+  // Single source of truth: drive everything off panelVisibility so the
+  // HUDToggle ⊞ button and the HUDMenuHub Show all / Hide all shortcuts
+  // stay perfectly in sync (PR-E unified them — used to have a separate
+  // `hudCollapsed` flag that the menu didn't see, which confused the
+  // operator on 2026-04-30 with two independent show-all controls).
+  const panelVisibility = useGarden((s) => s.panelVisibility)
+  const setAllPanelsVisible = useGarden((s) => s.setAllPanelsVisible)
+  const anyVisible = Object.values(panelVisibility).some(Boolean)
   const showGrid = useGarden((s) => s.showGrid)
   const setShowGrid = useGarden((s) => s.setShowGrid)
   return (
     <div style={BAR_STYLE} data-tour-id="hud-toggle-bar">
       <button
-        style={collapsed ? ICON_BTN_ACTIVE : ICON_BTN}
-        onClick={() => setCollapsed(!collapsed)}
+        style={!anyVisible ? ICON_BTN_ACTIVE : ICON_BTN}
+        onClick={() => setAllPanelsVisible(!anyVisible)}
         title={
-          collapsed
-            ? 'Show all HUD (chips, toolbar, inspector)'
-            : 'Hide all HUD — see the scene without overlays'
+          anyVisible
+            ? 'Hide all HUD panels — see the scene unobstructed'
+            : 'Show all HUD panels'
         }
         aria-label="toggle hud"
       >
-        {collapsed ? '⊟' : '⊞'}
+        {anyVisible ? '⊞' : '⊟'}
       </button>
       <button
         style={showGrid ? ICON_BTN_ACTIVE : ICON_BTN}

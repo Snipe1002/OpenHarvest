@@ -41,8 +41,12 @@ export default function R3FSceneBridge() {
 
   useEffect(() => {
     _sceneRefs = { camera, gl, raycaster }
+    // Mirror the singleton onto window so playwright tests (and dev-tools
+    // pokes) can introspect the scene graph without bundling the module.
+    ;(window as unknown as { __r3fSceneRefs: SceneRefs | null }).__r3fSceneRefs = _sceneRefs
     return () => {
       _sceneRefs = null
+      ;(window as unknown as { __r3fSceneRefs: SceneRefs | null }).__r3fSceneRefs = null
     }
   }, [camera, gl, raycaster])
 
