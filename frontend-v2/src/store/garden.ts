@@ -503,6 +503,15 @@ export interface GardenState {
   showButtonLabels: boolean
 
   /**
+   * Set by MultiSelectInspector while the arrange wizard is open and
+   * actively previewing a layout change. Bed/plant renderers honor this
+   * by dropping their opacity so the preview reads as "ghosted" — the
+   * user can tell they're looking at a non-committed state. Cleared on
+   * Apply success or Cancel.
+   */
+  arrangePreviewActive: boolean
+
+  /**
    * Data-driven prefab catalog fetched once on app boot from
    * `GET /api/v1/prefabs`. Drives the prefab picker, default geometry, and
    * (in upcoming work) hierarchy / placement / AI rules. `null` while loading
@@ -585,6 +594,7 @@ export interface GardenState {
   /** Toggle / set sticky placement, persist to localStorage. */
   setStickyPlacement: (v: boolean) => void
   setShowButtonLabels: (v: boolean) => void
+  setArrangePreviewActive: (v: boolean) => void
   /** Toggle / set multi-select mode, persist to localStorage. */
   setMultiSelectMode: (v: boolean) => void
   /**
@@ -625,6 +635,7 @@ export const useGarden = create<GardenState>((set, get) => ({
   selectedWallId: null,
   stickyPlacement: readPersistedSticky(),
   showButtonLabels: readPersistedLabels(),
+  arrangePreviewActive: false,
   multiSelectMode: readPersistedMultiMode(),
   units: readPersistedUnits(),
   prefabCatalog: null,
@@ -884,6 +895,8 @@ export const useGarden = create<GardenState>((set, get) => ({
     writePersistedLabels(v)
     set({ showButtonLabels: v })
   },
+
+  setArrangePreviewActive: (v) => set({ arrangePreviewActive: v }),
 
   setStickyPlacement: (v) => {
     writePersistedSticky(v)

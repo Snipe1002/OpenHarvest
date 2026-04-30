@@ -569,7 +569,13 @@ export default function MultiSelectInspector() {
   // for live preview — Cancel restores from it, Apply discards it. Above
   // the early return so the hook count stays stable.
   useEffect(() => {
-    if (!arrangeOpen) return
+    if (!arrangeOpen) {
+      // Clear the ghost flag when the panel closes — Apply, Cancel, Esc,
+      // and selection-loss all set arrangeOpen=false.
+      useGarden.getState().setArrangePreviewActive(false)
+      return
+    }
+    useGarden.getState().setArrangePreviewActive(true)
     const s = useGarden.getState()
     const snap: Record<string, GardenEntity> = {}
     for (const id of s.primarySelectedIds) {
@@ -1187,6 +1193,25 @@ export default function MultiSelectInspector() {
               Ring (polar)
             </button>
           </div>
+          {arrangeMode === 'grid' && (
+            <div style={{ ...FIELD_ROW, gap: 4 }}>
+              <span style={FIELD_LABEL}>Gap mode</span>
+              <button
+                style={snapMode === 'edge' ? TAB_BTN_ACTIVE : TAB_BTN}
+                onClick={() => useGarden.getState().setSnapMode('edge')}
+                title="Edge: gap is the visible space between bed edges. 0 means edges touch."
+              >
+                edge
+              </button>
+              <button
+                style={snapMode === 'center' ? TAB_BTN_ACTIVE : TAB_BTN}
+                onClick={() => useGarden.getState().setSnapMode('center')}
+                title="Center: gap is the center-to-center distance. 0 means beds overlap at the centroid."
+              >
+                center
+              </button>
+            </div>
+          )}
           {arrangeMode === 'grid' ? (
             <>
               <div data-tour-id="arrange-grid-cols" style={FIELD_ROW}>
