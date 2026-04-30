@@ -16,7 +16,6 @@
  */
 import * as THREE from 'three'
 import { useMemo, type ReactNode } from 'react'
-import { Outlines } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import type { GardenEntity, Quaternion } from '../api/types'
 import { useGarden } from '../store/garden'
@@ -55,6 +54,13 @@ export default function DemoBed({ entity, children }: DemoBedProps) {
   const isGroupTranslating = useGarden(
     (s) => s.groupTranslateActive && s.selectedEntityIds.includes(entity.id),
   )
+  // Ghost flag — when the arrange wizard is previewing, selected primaries
+  // render half-transparent so the user can tell the layout isn't committed
+  // yet. Cleared on Apply / Cancel / Esc / selection-loss by the inspector.
+  const isPreviewGhost = useGarden(
+    (s) => s.arrangePreviewActive && s.primarySelectedIds.includes(entity.id),
+  )
+  const ghostOpacity = isPreviewGhost ? 0.45 : 1
   const drag = useTranslateDrag(entity)
   const groupDrag = useGroupTranslateDrag(entity)
   const tap = useEntityTapVsLongPress(entity.id)
@@ -131,12 +137,13 @@ export default function DemoBed({ entity, children }: DemoBedProps) {
     : isMultiSelected
       ? '#4ec9ff'
       : '#ffaa00'
-  // drei's <Outlines thickness> is in WORLD UNITS, not pixels — values like
-  // "4" render the outline 4 meters thick, which projects offscreen and
-  // makes the glow invisible. ~4cm reads as a chunky highlight at typical
-  // garden scale; extension picks get a thinner outline so the user can
-  // tell primaries from descendants pulled in by extend-mode.
-  const outlineThickness = isExtension ? 0.02 : 0.04
+  // We dropped drei <Outlines> in PR #60 — even with thickness in the right
+  // world-units range, the outline didn't render visibly under Pascal's
+  // WebGPU pipeline (the back-faces-scaled-outward trick doesn't compose
+  // right). Replaced with a translucent halo box rendered around the bed.
+  // Padding is in world meters; opacity carries the visibility.
+  const haloPad = isExtension ? 0.06 : 0.12
+  const haloOpacity = isExtension ? 0.18 : 0.35
 
   // All plank/soil coords are RELATIVE to the group center (which sits at the
   // bed's mid-height). Rotation on the group then rotates the whole bed
@@ -156,31 +163,45 @@ export default function DemoBed({ entity, children }: DemoBedProps) {
       {/* +X plank */}
       <mesh position={[w / 2 - t / 2, 0, 0]} castShadow receiveShadow>
         <boxGeometry args={[t, h, l]} />
-        <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
-        {isSelected && <Outlines thickness={outlineThickness} color={outlineColor} />}
+        <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} transparent={isPreviewGhost} opacity={ghostOpacity} />
       </mesh>
       {/* -X plank */}
       <mesh position={[-w / 2 + t / 2, 0, 0]} castShadow receiveShadow>
         <boxGeometry args={[t, h, l]} />
-        <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
-        {isSelected && <Outlines thickness={outlineThickness} color={outlineColor} />}
+        <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} transparent={isPreviewGhost} opacity={ghostOpacity} />
       </mesh>
       {/* +Z plank */}
       <mesh position={[0, 0, l / 2 - t / 2]} castShadow receiveShadow>
         <boxGeometry args={[w, h, t]} />
-        <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
-        {isSelected && <Outlines thickness={outlineThickness} color={outlineColor} />}
+        <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} transparent={isPreviewGhost} opacity={ghostOpacity} />
       </mesh>
       {/* -Z plank */}
       <mesh position={[0, 0, -l / 2 + t / 2]} castShadow receiveShadow>
         <boxGeometry args={[w, h, t]} />
-        <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} />
-        {isSelected && <Outlines thickness={outlineThickness} color={outlineColor} />}
+        <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} transparent={isPreviewGhost} opacity={ghostOpacity} />
       </mesh>
+      {/* Selection halo — slightly-larger box drawn around the bed with
+          additive blending. Reads as a soft glow around the silhouette
+          even under WebGPU (drei's <Outlines> back-face trick doesn't).
+          raycast nulled so the halo doesn't intercept selection clicks;
+          depthWrite false so it doesn't sort over the planks awkwardly. */}
+      {isSelected && (
+        <mesh raycast={() => null}>
+          <boxGeometry args={[w + haloPad, h + haloPad, l + haloPad]} />
+          <meshBasicMaterial
+            color={outlineColor}
+            transparent
+            opacity={haloOpacity}
+            depthWrite={false}
+            blending={THREE.AdditiveBlending}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      )}
       {/* Soil — slightly inset, top sits 0.02m below frame top */}
       <mesh position={[0, h / 2 - 0.02 - (h - 0.04) / 2, 0]} receiveShadow>
         <boxGeometry args={[w - 2 * t, h - 0.04, l - 2 * t]} />
-        <meshStandardMaterial color="#3a2818" roughness={1.0} metalness={0} />
+        <meshStandardMaterial color="#3a2818" roughness={1.0} metalness={0} transparent={isPreviewGhost} opacity={ghostOpacity} />
       </mesh>
       {/* Hierarchical children. The outer group is shifted up by h/2 so its
           center sits at the bed's mid-height; we offset back down by h/2 here

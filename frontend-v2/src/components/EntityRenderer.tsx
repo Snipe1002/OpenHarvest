@@ -24,7 +24,8 @@
  * Moving the parent moves children with no manual cascade work.
  */
 import type { ReactNode } from 'react'
-import { Outlines, Text } from '@react-three/drei'
+import * as THREE from 'three'
+import { Text } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import DemoBed from './DemoBed'
 import DemoPlant from './DemoPlant'
@@ -158,10 +159,8 @@ function PrefabPlaceholder({ entity, children }: { entity: GardenEntity; childre
     : isMultiSelected
       ? '#4ec9ff'
       : '#ffaa00'
-  // drei <Outlines thickness> is in world units, not pixels — 4 means 4
-  // meters which renders offscreen. ~3cm reads as a clear glow at the
-  // entity scale we use; extension gets thinner so primaries stand out.
-  const outlineThickness = isExtension ? 0.015 : 0.03
+  // Halo box rendered as a sibling mesh — see DemoBed.tsx for rationale.
+  // (drei <Outlines> doesn't render visibly under WebGPU.)
   return (
     <group
       position={[x, y, z]}
@@ -176,8 +175,20 @@ function PrefabPlaceholder({ entity, children }: { entity: GardenEntity; childre
       <mesh position={[0, 0.25, 0]} castShadow receiveShadow>
         <boxGeometry args={[0.5, 0.5, 0.5]} />
         <meshStandardMaterial color="#a08c5e" roughness={0.6} metalness={0} />
-        {isSelected && <Outlines thickness={outlineThickness} color={outlineColor} />}
       </mesh>
+      {isSelected && (
+        <mesh position={[0, 0.25, 0]} raycast={() => null}>
+          <boxGeometry args={[0.5 + 0.08, 0.5 + 0.08, 0.5 + 0.08]} />
+          <meshBasicMaterial
+            color={outlineColor}
+            transparent
+            opacity={isExtension ? 0.18 : 0.35}
+            depthWrite={false}
+            blending={THREE.AdditiveBlending}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      )}
       <Text
         position={[0, 0.85, 0]}
         fontSize={0.12}
@@ -244,10 +255,8 @@ function UnknownDebugCube({ entity, children }: { entity: GardenEntity; children
     : isMultiSelected
       ? '#4ec9ff'
       : '#ffaa00'
-  // drei <Outlines thickness> is in world units, not pixels — 4 means 4
-  // meters which renders offscreen. ~3cm reads as a clear glow at the
-  // entity scale we use; extension gets thinner so primaries stand out.
-  const outlineThickness = isExtension ? 0.015 : 0.03
+  // Halo box rendered as a sibling mesh — see DemoBed.tsx for rationale.
+  // (drei <Outlines> doesn't render visibly under WebGPU.)
   return (
     <group
       position={[x, y, z]}
@@ -262,8 +271,20 @@ function UnknownDebugCube({ entity, children }: { entity: GardenEntity; children
       <mesh position={[0, 0.15, 0]} castShadow>
         <boxGeometry args={[0.3, 0.3, 0.3]} />
         <meshStandardMaterial color="#ff00ff" roughness={0.5} metalness={0} />
-        {isSelected && <Outlines thickness={outlineThickness} color={outlineColor} />}
       </mesh>
+      {isSelected && (
+        <mesh position={[0, 0.15, 0]} raycast={() => null}>
+          <boxGeometry args={[0.3 + 0.06, 0.3 + 0.06, 0.3 + 0.06]} />
+          <meshBasicMaterial
+            color={outlineColor}
+            transparent
+            opacity={isExtension ? 0.18 : 0.35}
+            depthWrite={false}
+            blending={THREE.AdditiveBlending}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      )}
       <Text
         position={[0, 0.55, 0]}
         fontSize={0.1}

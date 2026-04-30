@@ -15,7 +15,6 @@
  */
 import * as THREE from 'three'
 import { useMemo, type ReactNode } from 'react'
-import { Outlines } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import type { GardenEntity, Quaternion } from '../api/types'
 import { useGarden } from '../store/garden'
@@ -126,9 +125,14 @@ export default function DemoPlant({ entity, children }: DemoPlantProps) {
     : isMultiSelected
       ? '#4ec9ff'
       : '#ffaa00'
-  // drei <Outlines thickness> is in world units. Plants are tiny so use a
-  // smaller thickness than beds — 1.5cm primary, 0.7cm extension.
-  const outlineThickness = isExtension ? 0.007 : 0.015
+  // Halo uses the same approach as DemoBed — a slightly-larger additive
+  // box around the plant. Padding scaled to plant size so it reads as a
+  // glow without looking grossly oversized.
+  const haloPad = isExtension ? 0.02 : 0.04
+  const haloOpacity = isExtension ? 0.18 : 0.35
+  const haloW = leafSize + haloPad
+  const haloH = stemHeight + haloPad
+  const haloL = leafSize + haloPad
 
   return (
     <group
@@ -146,8 +150,21 @@ export default function DemoPlant({ entity, children }: DemoPlantProps) {
       <mesh position={[0, stemHeight / 2, 0]} castShadow>
         <cylinderGeometry args={[stemRadius, stemRadius, stemHeight, 8]} />
         <meshStandardMaterial color="#4a8a3a" roughness={0.8} metalness={0} />
-        {isSelected && <Outlines thickness={outlineThickness} color={outlineColor} />}
       </mesh>
+      {/* Selection halo — see DemoBed.tsx for the rationale. */}
+      {isSelected && (
+        <mesh position={[0, stemHeight / 2, 0]} raycast={() => null}>
+          <boxGeometry args={[haloW, haloH, haloL]} />
+          <meshBasicMaterial
+            color={outlineColor}
+            transparent
+            opacity={haloOpacity}
+            depthWrite={false}
+            blending={THREE.AdditiveBlending}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      )}
       {/* Leaf 1 */}
       <mesh position={[leafSize / 2, stemHeight * 0.85, 0]} rotation={[0, 0, Math.PI / 6]} castShadow>
         <planeGeometry args={[leafSize, leafSize]} />
