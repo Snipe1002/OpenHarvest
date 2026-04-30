@@ -160,7 +160,6 @@ export default function DemoPlant({ entity, children }: DemoPlantProps) {
             transparent
             opacity={haloOpacity}
             depthWrite={false}
-            blending={THREE.AdditiveBlending}
             side={THREE.DoubleSide}
           />
         </mesh>

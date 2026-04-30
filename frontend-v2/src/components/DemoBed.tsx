@@ -137,13 +137,14 @@ export default function DemoBed({ entity, children }: DemoBedProps) {
     : isMultiSelected
       ? '#4ec9ff'
       : '#ffaa00'
-  // We dropped drei <Outlines> in PR #60 — even with thickness in the right
-  // world-units range, the outline didn't render visibly under Pascal's
-  // WebGPU pipeline (the back-faces-scaled-outward trick doesn't compose
-  // right). Replaced with a translucent halo box rendered around the bed.
-  // Padding is in world meters; opacity carries the visibility.
-  const haloPad = isExtension ? 0.06 : 0.12
-  const haloOpacity = isExtension ? 0.18 : 0.35
+  // Halo box around the bed when selected. PR #60 swapped from drei
+  // <Outlines> (broken under WebGPU) to a semi-transparent larger box;
+  // PR #61 widened the ring and dropped additive blending, which under
+  // WebGPU was producing weird saturated colors when combined with the
+  // ghost-preview opacity. Plain alpha blending reads as a clean tinted
+  // halo around the silhouette.
+  const haloPad = isExtension ? 0.15 : 0.25
+  const haloOpacity = isExtension ? 0.3 : 0.55
 
   // All plank/soil coords are RELATIVE to the group center (which sits at the
   // bed's mid-height). Rotation on the group then rotates the whole bed
@@ -181,10 +182,10 @@ export default function DemoBed({ entity, children }: DemoBedProps) {
         <meshStandardMaterial color="#6b4423" roughness={0.7} metalness={0} transparent={isPreviewGhost} opacity={ghostOpacity} />
       </mesh>
       {/* Selection halo — slightly-larger box drawn around the bed with
-          additive blending. Reads as a soft glow around the silhouette
-          even under WebGPU (drei's <Outlines> back-face trick doesn't).
-          raycast nulled so the halo doesn't intercept selection clicks;
-          depthWrite false so it doesn't sort over the planks awkwardly. */}
+          plain alpha blending. Visible under WebGPU (drei's <Outlines>
+          back-face trick doesn't render). raycast nulled so the halo
+          doesn't intercept selection clicks; depthWrite false so it
+          doesn't sort over the planks awkwardly. */}
       {isSelected && (
         <mesh raycast={() => null}>
           <boxGeometry args={[w + haloPad, h + haloPad, l + haloPad]} />
@@ -193,7 +194,6 @@ export default function DemoBed({ entity, children }: DemoBedProps) {
             transparent
             opacity={haloOpacity}
             depthWrite={false}
-            blending={THREE.AdditiveBlending}
             side={THREE.DoubleSide}
           />
         </mesh>

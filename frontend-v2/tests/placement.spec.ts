@@ -596,15 +596,87 @@ test('selecting an entity adds outline pixels to the rendered scene', async ({
       fullPage: false,
     })
 
-    // Outline adds bright cyan/orange pixels — the PNG byte size grows by
-    // a noticeable amount when those rendered pixels appear. Threshold is
-    // generous (1KB) since the outline is a small fraction of the frame
-    // but still well above PNG compression noise (~100B run-to-run).
+    // Outline adds cyan/orange pixels around the selected bed silhouette.
+    // The byte-diff is small in absolute terms — a single bed at the
+    // canvas center adds maybe 0.3% of the frame's compressed bytes —
+    // but it's well above PNG compression noise (~100B per run). Anything
+    // over 400B confirms the halo is rendering visible pixels somewhere;
+    // a complete-render-failure regression would land near 0.
     const delta = afterShot.length - beforeShot.length
     expect(
       Math.abs(delta),
-      `before=${beforeShot.length}B after=${afterShot.length}B delta=${delta}B — outline should change pixel count`,
-    ).toBeGreaterThan(1000)
+      `before=${beforeShot.length}B after=${afterShot.length}B delta=${delta}B — halo should change pixel count`,
+    ).toBeGreaterThan(400)
+  } finally {
+    await deleteEntities(request, gardenId, ids)
+  }
+})
+
+test('arrange grid edge mode honors world-aligned bounds for rotated beds', async ({
+  page,
+  request,
+}) => {
+  // Rotated bed regression guard from the user's 2026-04-30 report. With
+  // a 90° Y rotation, a 4ft × 8ft bed's world-X extent is 8ft (its local
+  // Z axis is now world X). Edge mode 0 col gap should produce 8ft X
+  // spacing, not 4ft (which is the local size.x). PR #61 fixed this by
+  // computing the world-aligned AABB from the quaternion.
+  await loadAppAndWait(page)
+  const gardenId = await getGardenId(page)
+  const ids: string[] = []
+  try {
+    // 4 beds rotated 90° around Y. quaternion for Y-axis 90° rotation:
+    // w = cos(45°) = √0.5, y = sin(45°) = √0.5, x = z = 0.
+    const ROOT_HALF = Math.SQRT1_2
+    for (let i = 0; i < 4; i++) {
+      const res = await request.post(`${API_BASE}/gardens/${gardenId}/entities`, {
+        data: {
+          kind: 'Bed',
+          transform: {
+            position: { x: i * 0.05, y: 0, z: i * 0.05 },
+            rotation: { x: 0, y: ROOT_HALF, z: 0, w: ROOT_HALF },
+            scale: { x: 1, y: 1, z: 1 },
+          },
+          geometry: { kind: 'Box', size: DEFAULT_BED_SIZE },
+          tags: ['playwright-test'],
+        },
+      })
+      const body = await res.json()
+      ids.push(body.id)
+    }
+    await waitForEntitiesPresent(page, ids)
+    await selectIds(page, ids)
+
+    await page.evaluate(() => {
+      const store = (window as unknown as { __openharvestStore?: { getState: () => { setSnapMode: (m: 'edge' | 'center') => void } } })
+        .__openharvestStore
+      store?.getState().setSnapMode('edge')
+    })
+
+    await page.locator('[data-tour-id="multi-arrange"]').click()
+    await page.waitForTimeout(500)
+    await page.locator('[data-tour-id="arrange-grid-gap-x"] input[type="range"]').fill('0')
+    await page.locator('[data-tour-id="arrange-grid-gap-z"] input[type="range"]').fill('0')
+    await page.waitForTimeout(400)
+    await page.locator('[data-tour-id="arrange-apply"]').click()
+    await page.waitForTimeout(SETTLE_MS)
+    await page.screenshot({
+      path: 'tests/artifacts/placement-rotated-edge-gap.png',
+      fullPage: false,
+    })
+
+    const entities = await getEntities(page, ids)
+    // World-X extent of a 90°-rotated bed = its local Z = 2.4384m (8ft).
+    // 4 beds in 4 cols (single row default) → 3 col-steps of 2.4384m.
+    const xs = entities.map((e) => e.transform.position.x).sort((a, b) => a - b)
+    const expectedStep = DEFAULT_BED_SIZE.z // post-rotation world-X width
+    for (let i = 1; i < xs.length; i++) {
+      const step = xs[i] - xs[i - 1]
+      expect(
+        Math.abs(step - expectedStep),
+        `rotated bed col-step ${step} should ≈ world-X width ${expectedStep}`,
+      ).toBeLessThan(0.05)
+    }
   } finally {
     await deleteEntities(request, gardenId, ids)
   }

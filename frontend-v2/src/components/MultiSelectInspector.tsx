@@ -629,16 +629,41 @@ export default function MultiSelectInspector() {
     if (arrangeMode === 'grid') {
       const totalCols = Math.max(1, Math.min(cols, entitiesArr.length))
       const totalRows = Math.ceil(entitiesArr.length / totalCols)
-      // Edge mode: gap is the SPACE between bed edges. We add the average
-      // bed footprint to the user's gap to get the center-to-center step.
-      // Center mode: gap IS center-to-center, matches the legacy behavior.
-      // Without this branch, dragging the gap slider to 0 in edge mode
-      // overlaps every bed onto the centroid — see user report 2026-04-29.
+      // Edge mode: gap is the SPACE between bed edges. The center-to-center
+      // step is `world_aligned_footprint + gap`. We have to use the world-
+      // aligned footprint (not local size.x/size.z) because rotated beds
+      // have their local X axis pointing along world Z — using local size
+      // gives wrong spacing the moment a bed is rotated, which the user
+      // hit on 2026-04-30 with a screenshot showing 4ft beds laid out
+      // 8ft apart on the col axis.
+      //
+      // Quaternion-rotated rectangle's world AABB:
+      //   worldX_extent = |size.x * (1 - 2y² - 2z²)| + |size.z * (2xy + 2wz - 2xy)|
+      // Easier: project the four local-XZ corners through the rotation,
+      // take the AABB. Even simpler for Y-up rotations: extract the Euler
+      // Y angle and use trig.
+      const aabbXZ = (e: GardenEntity): { dx: number; dz: number } => {
+        const sx = e.geometry.size?.x ?? 0
+        const sz = e.geometry.size?.z ?? 0
+        // For pure Y-axis rotation (the common case for ground-plane
+        // entities), the AABB on XZ is determined by the Y-angle alone.
+        const q = e.transform.rotation
+        // Extract the Y component of the rotation. Three's quaternion
+        // → Euler conversion handles the general case; fall through to
+        // the trig formula here without instantiating Three objects to
+        // keep this hot loop light.
+        // y angle: atan2(2*(w*y + x*z), 1 - 2*(y*y + z*z))
+        const yAngle = Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z))
+        const c = Math.abs(Math.cos(yAngle))
+        const s = Math.abs(Math.sin(yAngle))
+        return { dx: sx * c + sz * s, dz: sx * s + sz * c }
+      }
       let avgWidth = 0
       let avgDepth = 0
       for (const e of entitiesArr) {
-        avgWidth += e.geometry.size?.x ?? 0
-        avgDepth += e.geometry.size?.z ?? 0
+        const ext = aabbXZ(e)
+        avgWidth += ext.dx
+        avgDepth += ext.dz
       }
       avgWidth /= entitiesArr.length
       avgDepth /= entitiesArr.length
