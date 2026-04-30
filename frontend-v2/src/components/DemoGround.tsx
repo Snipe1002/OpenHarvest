@@ -277,7 +277,19 @@ export default function DemoGround() {
       snap,
       multiSelectMode,
       prefabCatalog,
+      cameraFocusPicking,
     } = state
+
+    // Camera-focus picking takes precedence over every other ground click:
+    // when the operator has armed the focus pin from the left rail, the
+    // next ground tap sets the orbit target and exits picking mode. Other
+    // clicks (placement, selection-clear) wait until they release the pin.
+    if (cameraFocusPicking) {
+      e.stopPropagation()
+      useGarden.getState().setCameraFocus({ x: e.point.x, y: 0, z: e.point.z })
+      useGarden.getState().setCameraFocusPicking(false)
+      return
+    }
 
     // Region paint owns the ground pointer pipeline (down/move/up). A click
     // while painting is a no-op — we don't want to drop a stray entity into

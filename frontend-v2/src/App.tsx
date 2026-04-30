@@ -7,6 +7,9 @@ import EntityRenderer from './components/EntityRenderer'
 import type { GardenEntity, Guid } from './api/types'
 import { createDoorOnWall, createWindowOnWall } from './components/houseHelpers'
 import ArrangeAnchor from './components/ArrangeAnchor'
+import CameraFocusBinder from './components/CameraFocusBinder'
+import CameraFocusButton from './components/CameraFocusButton'
+import CameraFocusMarker from './components/CameraFocusMarker'
 import CompassWidget from './components/CompassWidget'
 import HUDMenuHub from './components/HUDMenuHub'
 import HUDToggle from './components/HUDToggle'
@@ -73,10 +76,9 @@ export default function App() {
   // main toolbar, inspector cards, status pills) is hidden so the user
   // can see the scene unobstructed. The HUDToggle button + CompassWidget
   // stay visible so the user can re-summon the rest.
-  const hudCollapsed = useGarden((s) => s.hudCollapsed)
-  // Per-panel visibility — orthogonal to the master `hudCollapsed`
-  // toggle. The HUDMenuHub (summoned by tapping the compass) lets the
-  // user hide individual pieces.
+  // Per-panel visibility — single source of truth for what's on screen.
+  // The HUDToggle ⊞ button and the HUDMenuHub Show all / Hide all both
+  // drive this map.
   const panelVisibility = useGarden((s) => s.panelVisibility)
 
   useEffect(() => {
@@ -221,6 +223,13 @@ export default function App() {
             button-drag (finger pressed on an inspector ⇄ button as the drag
             handle), so the view doesn't pan along with the pointer. */}
         <CameraControls
+          // makeDefault registers these controls as `state.controls`, so
+          // CameraFocusBinder (below) can `useThree(s => s.controls)` to
+          // call setTarget without dragging a ref through Pascal's
+          // <Viewer> proxy (the ref-on-CameraControls path made the
+          // post-click scene blank in playwright; root cause unclear,
+          // but the makeDefault path is well-trodden in drei's docs).
+          makeDefault
           enabled={
             !translateModeId &&
             !groupTranslateActive &&
@@ -234,6 +243,10 @@ export default function App() {
           minDistance={1}
           maxDistance={200}
         />
+        {/* Tracks the cameraFocus store flag and, when set, calls
+            setTarget on whichever controls are state.controls (drei's
+            CameraControls thanks to `makeDefault` above). */}
+        <CameraFocusBinder />
         {/* Captures camera/renderer/raycaster into a module-level singleton
             so `useButtonDragHandle` can raycast the finger onto the ground
             plane from outside the R3F tree (MultiSelectInspector lives in
@@ -261,32 +274,33 @@ export default function App() {
             multi-select arrange panel is open; drag to relocate the
             layout origin in 3D. */}
         <ArrangeAnchor />
+        {/* Small marker at the camera-focus point so the user can see
+            where the orbit pivot is currently pinned. Only renders when
+            cameraFocus is set. */}
+        <CameraFocusMarker />
       </Viewer>
       {/* HTML overlays — siblings of the Viewer canvas. The four chips
           (Snap, Sticky, Multi, Units) stack vertically in a top-left
           column so they don't fight for horizontal space with the
           bottom-center MainToolbar or the center status pills (which now
           sit at top:152, well below the chip column). */}
-      {!hudCollapsed && (
+      {panelVisibility.chips && (
         <>
-          {panelVisibility.chips && (
-            <>
-              <SnapChip />
-              <StickyChip />
-              <MultiChip />
-              <UnitsChip />
-              <LabelsChip />
-            </>
-          )}
-          {panelVisibility.inspector && <InspectorCard />}
-          {panelVisibility.mainToolbar && <MainToolbar />}
-          {panelVisibility.multiInspector && <MultiSelectInspector />}
-          <TranslateStatusPill />
+          <SnapChip />
+          <StickyChip />
+          <MultiChip />
+          <UnitsChip />
+          <LabelsChip />
         </>
       )}
+      {panelVisibility.inspector && <InspectorCard />}
+      {panelVisibility.mainToolbar && <MainToolbar />}
+      {panelVisibility.multiInspector && <MultiSelectInspector />}
+      <TranslateStatusPill />
       <ToastBar />
       <HUDToggle />
       <CompassWidget />
+      <CameraFocusButton />
       <HUDMenuHub />
       <TourSystem />
     </div>
