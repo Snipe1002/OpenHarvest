@@ -990,6 +990,36 @@ export default function MultiSelectInspector() {
   }
 
   /**
+   * Spread — push every primary AWAY from the axis-centroid by a factor.
+   * Inverse of "bring closer" semantics in distribute / align. Uniform
+   * scale around the centroid on the chosen axis only — Y is untouched
+   * and the cross axis is preserved (unlike distribute, which collapses
+   * the cross axis to make a clean line). Tap repeatedly to keep
+   * spreading by the same factor.
+   */
+  const onSpread = async (axis: 'x' | 'z') => {
+    if (selected.length < 2) return
+    const SPREAD_FACTOR = 1.25
+    let center = 0
+    for (const e of selected) center += e.transform.position[axis]
+    center /= selected.length
+    const next = selected.map((e) => ({
+      ...e,
+      transform: {
+        ...e.transform,
+        position: {
+          ...e.transform.position,
+          [axis]: center + (e.transform.position[axis] - center) * SPREAD_FACTOR,
+        },
+      },
+    }))
+    const result = await applyOptimisticPatch(next)
+    if (result.ok) {
+      setToast(`Spread ${selected.length} on ${axis.toUpperCase()} by ${Math.round((SPREAD_FACTOR - 1) * 100)}%`)
+    }
+  }
+
+  /**
    * Normalize — distribute primaries evenly along whichever in-plane axis
    * (X or Z) is the longest extent of the current selection. The user
    * doesn't have to think about which axis applies; we look at
@@ -1493,6 +1523,32 @@ export default function MultiSelectInspector() {
           }
         >
           {lbl('↕', 'dist z')}
+        </button>
+        <button
+          data-tour-id="multi-spread-x"
+          style={buttonDisabled || levelLockedDisabled ? disabledBtn : baseBtn}
+          onClick={() => onSpread('x')}
+          disabled={buttonDisabled || levelLockedDisabled}
+          title={
+            levelLockedDisabled
+              ? mixedTooltip
+              : 'Spread on X — push every primary 25% farther from the X centroid (inverse of distribute). Tap repeatedly to keep spreading.'
+          }
+        >
+          {lbl('⇿', 'spread x')}
+        </button>
+        <button
+          data-tour-id="multi-spread-z"
+          style={buttonDisabled || levelLockedDisabled ? disabledBtn : baseBtn}
+          onClick={() => onSpread('z')}
+          disabled={buttonDisabled || levelLockedDisabled}
+          title={
+            levelLockedDisabled
+              ? mixedTooltip
+              : 'Spread on Z — push every primary 25% farther from the Z centroid. Tap repeatedly to keep spreading.'
+          }
+        >
+          {lbl('⇕', 'spread z')}
         </button>
         <span style={{ width: 1, alignSelf: 'stretch', background: '#444', margin: '0 2px' }} />
         <button

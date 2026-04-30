@@ -178,11 +178,11 @@ function PrefabPlaceholder({ entity, children }: { entity: GardenEntity; childre
       </mesh>
       {isSelected && (
         <mesh position={[0, 0.25, 0]} raycast={() => null}>
-          <boxGeometry args={[0.5 + 0.08, 0.5 + 0.08, 0.5 + 0.08]} />
+          <boxGeometry args={[0.5 + 0.04, 0.5 + 0.04, 0.5 + 0.04]} />
           <meshBasicMaterial
             color={outlineColor}
             transparent
-            opacity={isExtension ? 0.3 : 0.55}
+            opacity={isExtension ? 0.4 : 0.65}
             depthWrite={false}
             side={THREE.DoubleSide}
           />
@@ -273,11 +273,11 @@ function UnknownDebugCube({ entity, children }: { entity: GardenEntity; children
       </mesh>
       {isSelected && (
         <mesh position={[0, 0.15, 0]} raycast={() => null}>
-          <boxGeometry args={[0.3 + 0.06, 0.3 + 0.06, 0.3 + 0.06]} />
+          <boxGeometry args={[0.3 + 0.03, 0.3 + 0.03, 0.3 + 0.03]} />
           <meshBasicMaterial
             color={outlineColor}
             transparent
-            opacity={isExtension ? 0.3 : 0.55}
+            opacity={isExtension ? 0.4 : 0.65}
             depthWrite={false}
             side={THREE.DoubleSide}
           />

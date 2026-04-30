@@ -139,12 +139,12 @@ export default function DemoBed({ entity, children }: DemoBedProps) {
       : '#ffaa00'
   // Halo box around the bed when selected. PR #60 swapped from drei
   // <Outlines> (broken under WebGPU) to a semi-transparent larger box;
-  // PR #61 widened the ring and dropped additive blending, which under
-  // WebGPU was producing weird saturated colors when combined with the
-  // ghost-preview opacity. Plain alpha blending reads as a clean tinted
-  // halo around the silhouette.
-  const haloPad = isExtension ? 0.15 : 0.25
-  const haloOpacity = isExtension ? 0.3 : 0.55
+  // PR #61 dropped additive blending (was producing magenta tinting under
+  // WebGPU). PR #62 tightened the pad — earlier 25cm aura was too loose
+  // and made the bed look swallowed by the highlight; ~5cm keeps the
+  // halo hugging the silhouette while still reading clearly as a glow.
+  const haloPad = isExtension ? 0.03 : 0.05
+  const haloOpacity = isExtension ? 0.4 : 0.65
 
   // All plank/soil coords are RELATIVE to the group center (which sits at the
   // bed's mid-height). Rotation on the group then rotates the whole bed
