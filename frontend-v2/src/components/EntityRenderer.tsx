@@ -182,9 +182,8 @@ function PrefabPlaceholder({ entity, children }: { entity: GardenEntity; childre
           <meshBasicMaterial
             color={outlineColor}
             transparent
-            opacity={isExtension ? 0.18 : 0.35}
+            opacity={isExtension ? 0.3 : 0.55}
             depthWrite={false}
-            blending={THREE.AdditiveBlending}
             side={THREE.DoubleSide}
           />
         </mesh>
@@ -278,9 +277,8 @@ function UnknownDebugCube({ entity, children }: { entity: GardenEntity; children
           <meshBasicMaterial
             color={outlineColor}
             transparent
-            opacity={isExtension ? 0.18 : 0.35}
+            opacity={isExtension ? 0.3 : 0.55}
             depthWrite={false}
-            blending={THREE.AdditiveBlending}
             side={THREE.DoubleSide}
           />
         </mesh>
