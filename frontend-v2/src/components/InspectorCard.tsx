@@ -539,7 +539,8 @@ export default function InspectorCard() {
       // WHICH entity is being inspected; predictable corner location wins.
       style={{
         position: 'fixed',
-        top: 16,
+        // Below the HUDToggle bar (top:16, h:40, +8 gap).
+        top: 64,
         right: 16,
         zIndex: 12,
         display: 'flex',
