@@ -21,6 +21,7 @@ const MULTI_STORAGE_KEY = 'openharvest:v2:multiSelectMode'
 const UNITS_STORAGE_KEY = 'openharvest:v2:units'
 const LABELS_STORAGE_KEY = 'openharvest:v2:showButtonLabels'
 const GRID_STORAGE_KEY = 'openharvest:v2:showGrid'
+const PANEL_VISIBILITY_STORAGE_KEY = 'openharvest:v2:panelVisibility'
 
 function readPersistedGardenId(): Guid | null {
   if (typeof window === 'undefined') return null
@@ -181,6 +182,45 @@ function readPersistedMultiMode(): boolean {
     return window.localStorage.getItem(MULTI_STORAGE_KEY) === '1'
   } catch {
     return false
+  }
+}
+
+// Each HUD panel has a separate visibility flag so the user can hide
+// pieces individually via the menu hub. Defaults all-on; persisted to
+// localStorage so the layout sticks across reloads. Adding a new panel
+// id requires a default in the constant below — readers fall back to
+// `true` for any id missing from the persisted blob.
+export type PanelId = 'chips' | 'mainToolbar' | 'inspector' | 'multiInspector'
+const DEFAULT_PANEL_VISIBILITY: Record<PanelId, boolean> = {
+  chips: true,
+  mainToolbar: true,
+  inspector: true,
+  multiInspector: true,
+}
+
+function readPersistedPanelVisibility(): Record<PanelId, boolean> {
+  if (typeof window === 'undefined') return { ...DEFAULT_PANEL_VISIBILITY }
+  try {
+    const raw = window.localStorage.getItem(PANEL_VISIBILITY_STORAGE_KEY)
+    if (!raw) return { ...DEFAULT_PANEL_VISIBILITY }
+    const parsed = JSON.parse(raw) as Record<string, boolean>
+    return {
+      chips: parsed.chips ?? true,
+      mainToolbar: parsed.mainToolbar ?? true,
+      inspector: parsed.inspector ?? true,
+      multiInspector: parsed.multiInspector ?? true,
+    }
+  } catch {
+    return { ...DEFAULT_PANEL_VISIBILITY }
+  }
+}
+
+function writePersistedPanelVisibility(v: Record<PanelId, boolean>): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(PANEL_VISIBILITY_STORAGE_KEY, JSON.stringify(v))
+  } catch {
+    /* no-op */
   }
 }
 
@@ -532,6 +572,21 @@ export interface GardenState {
   hudCollapsed: boolean
 
   /**
+   * Per-panel visibility flags — orthogonal to `hudCollapsed`. A panel
+   * renders only when both `!hudCollapsed` AND its own flag is true. The
+   * menu hub (summoned by tapping the compass) toggles individual flags;
+   * the HUDToggle ⊞ button toggles `hudCollapsed`. Persisted to
+   * localStorage so the operator's layout choices survive reloads.
+   */
+  panelVisibility: Record<PanelId, boolean>
+
+  /**
+   * When true, the HUDMenuHub popup (anchored next to the compass) is
+   * showing the per-panel toggles. Session-only.
+   */
+  menuHubOpen: boolean
+
+  /**
    * When true, render a foot-or-meter grid on the ground plane so the
    * user has a visual ruler reference. Persisted to localStorage so the
    * preference survives reloads.
@@ -640,6 +695,9 @@ export interface GardenState {
   setShowButtonLabels: (v: boolean) => void
   setHudCollapsed: (v: boolean) => void
   setShowGrid: (v: boolean) => void
+  setPanelVisibility: (id: PanelId, v: boolean) => void
+  setAllPanelsVisible: (v: boolean) => void
+  setMenuHubOpen: (v: boolean) => void
   setArrangePreviewActive: (v: boolean) => void
   setArrangeAnchor: (v: { x: number; z: number } | null) => void
   /** Toggle / set multi-select mode, persist to localStorage. */
@@ -684,6 +742,8 @@ export const useGarden = create<GardenState>((set, get) => ({
   showButtonLabels: readPersistedLabels(),
   hudCollapsed: false,
   showGrid: readPersistedGrid(),
+  panelVisibility: readPersistedPanelVisibility(),
+  menuHubOpen: false,
   arrangePreviewActive: false,
   arrangeAnchor: null,
   multiSelectMode: readPersistedMultiMode(),
@@ -952,6 +1012,29 @@ export const useGarden = create<GardenState>((set, get) => ({
     writePersistedGrid(v)
     set({ showGrid: v })
   },
+
+  setPanelVisibility: (id, v) => {
+    set((s) => {
+      const next = { ...s.panelVisibility, [id]: v }
+      writePersistedPanelVisibility(next)
+      return { panelVisibility: next }
+    })
+  },
+
+  setAllPanelsVisible: (v) => {
+    set(() => {
+      const next: Record<PanelId, boolean> = {
+        chips: v,
+        mainToolbar: v,
+        inspector: v,
+        multiInspector: v,
+      }
+      writePersistedPanelVisibility(next)
+      return { panelVisibility: next }
+    })
+  },
+
+  setMenuHubOpen: (v) => set({ menuHubOpen: v }),
 
   setArrangePreviewActive: (v) => set({ arrangePreviewActive: v }),
 
