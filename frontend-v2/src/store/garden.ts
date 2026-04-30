@@ -20,6 +20,7 @@ const STICKY_STORAGE_KEY = 'openharvest:v2:stickyPlacement'
 const MULTI_STORAGE_KEY = 'openharvest:v2:multiSelectMode'
 const UNITS_STORAGE_KEY = 'openharvest:v2:units'
 const LABELS_STORAGE_KEY = 'openharvest:v2:showButtonLabels'
+const GRID_STORAGE_KEY = 'openharvest:v2:showGrid'
 
 function readPersistedGardenId(): Guid | null {
   if (typeof window === 'undefined') return null
@@ -180,6 +181,25 @@ function readPersistedMultiMode(): boolean {
     return window.localStorage.getItem(MULTI_STORAGE_KEY) === '1'
   } catch {
     return false
+  }
+}
+
+function readPersistedGrid(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.localStorage.getItem(GRID_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writePersistedGrid(v: boolean): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (v) window.localStorage.setItem(GRID_STORAGE_KEY, '1')
+    else window.localStorage.removeItem(GRID_STORAGE_KEY)
+  } catch {
+    /* no-op */
   }
 }
 
@@ -503,6 +523,22 @@ export interface GardenState {
   showButtonLabels: boolean
 
   /**
+   * When true, every HUD chip / toolbar / inspector is hidden — the only
+   * thing remaining on top of the canvas is the corner HUDToggle button
+   * (so the user can re-summon everything) and the compass widget. Lets
+   * the user see the scene without the HUD eating ~⅓ of the viewport.
+   * Session-only — defaults false on every load.
+   */
+  hudCollapsed: boolean
+
+  /**
+   * When true, render a foot-or-meter grid on the ground plane so the
+   * user has a visual ruler reference. Persisted to localStorage so the
+   * preference survives reloads.
+   */
+  showGrid: boolean
+
+  /**
    * Set by MultiSelectInspector while the arrange wizard is open and
    * actively previewing a layout change. Bed/plant renderers honor this
    * by dropping their opacity so the preview reads as "ghosted" — the
@@ -594,6 +630,8 @@ export interface GardenState {
   /** Toggle / set sticky placement, persist to localStorage. */
   setStickyPlacement: (v: boolean) => void
   setShowButtonLabels: (v: boolean) => void
+  setHudCollapsed: (v: boolean) => void
+  setShowGrid: (v: boolean) => void
   setArrangePreviewActive: (v: boolean) => void
   /** Toggle / set multi-select mode, persist to localStorage. */
   setMultiSelectMode: (v: boolean) => void
@@ -635,6 +673,8 @@ export const useGarden = create<GardenState>((set, get) => ({
   selectedWallId: null,
   stickyPlacement: readPersistedSticky(),
   showButtonLabels: readPersistedLabels(),
+  hudCollapsed: false,
+  showGrid: readPersistedGrid(),
   arrangePreviewActive: false,
   multiSelectMode: readPersistedMultiMode(),
   units: readPersistedUnits(),
@@ -894,6 +934,13 @@ export const useGarden = create<GardenState>((set, get) => ({
   setShowButtonLabels: (v) => {
     writePersistedLabels(v)
     set({ showButtonLabels: v })
+  },
+
+  setHudCollapsed: (v) => set({ hudCollapsed: v }),
+
+  setShowGrid: (v) => {
+    writePersistedGrid(v)
+    set({ showGrid: v })
   },
 
   setArrangePreviewActive: (v) => set({ arrangePreviewActive: v }),

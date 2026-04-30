@@ -6,11 +6,14 @@ import DemoGround from './components/DemoGround'
 import EntityRenderer from './components/EntityRenderer'
 import type { GardenEntity, Guid } from './api/types'
 import { createDoorOnWall, createWindowOnWall } from './components/houseHelpers'
+import CompassWidget from './components/CompassWidget'
+import HUDToggle from './components/HUDToggle'
 import InspectorCard from './components/InspectorCard'
 import LabelsChip from './components/LabelsChip'
 import MainToolbar from './components/MainToolbar'
 import MultiChip from './components/MultiChip'
 import MultiSelectInspector from './components/MultiSelectInspector'
+import SceneGrid from './components/SceneGrid'
 import R3FSceneBridge from './components/r3fSceneBridge'
 import RegionPaint from './components/RegionPaint'
 import SampleBuilding from './components/SampleBuilding'
@@ -64,6 +67,11 @@ export default function App() {
   const regionDragActive = useGarden(
     (s) => s.regionPaint?.phase === 'awaiting-second-corner',
   )
+  // HUD collapse — when true, every overlay-style component (chips,
+  // main toolbar, inspector cards, status pills) is hidden so the user
+  // can see the scene unobstructed. The HUDToggle button + CompassWidget
+  // stay visible so the user can re-summon the rest.
+  const hudCollapsed = useGarden((s) => s.hudCollapsed)
 
   useEffect(() => {
     let cancelled = false
@@ -226,6 +234,7 @@ export default function App() {
             the DOM, not under the Canvas). */}
         <R3FSceneBridge />
         <DemoGround />
+        <SceneGrid />
         {renderChildren(null, new Set())}
         {orphanRoots.map((e) => (
           <EntityRenderer key={e.id} entity={e}>
@@ -248,16 +257,22 @@ export default function App() {
           column so they don't fight for horizontal space with the
           bottom-center MainToolbar or the center status pills (which now
           sit at top:152, well below the chip column). */}
-      <SnapChip />
-      <StickyChip />
-      <MultiChip />
-      <UnitsChip />
-      <LabelsChip />
-      <InspectorCard />
-      <MainToolbar />
-      <MultiSelectInspector />
-      <TranslateStatusPill />
+      {!hudCollapsed && (
+        <>
+          <SnapChip />
+          <StickyChip />
+          <MultiChip />
+          <UnitsChip />
+          <LabelsChip />
+          <InspectorCard />
+          <MainToolbar />
+          <MultiSelectInspector />
+          <TranslateStatusPill />
+        </>
+      )}
       <ToastBar />
+      <HUDToggle />
+      <CompassWidget />
       <TourSystem />
     </div>
   )
