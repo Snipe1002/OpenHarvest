@@ -81,6 +81,15 @@ services:
       - Minio__UseSsl=false
       - Minio__PresignedUrlBase=http://localhost:9000
       - AI__Claude__ApiKey=${CLAUDE_API_KEY:-}
+      # Walk-mode v1 — operator-configured vision-inference endpoint following the
+      # contract documented in README.md "Walk Mode → Vision endpoint contract".
+      # Leave unset to disable classification (captures still upload, the staging
+      # panel just marks them ClassificationFailed; manual promote still works).
+      - OpenHarvest__Vision__Url=${OPENHARVEST_VISION_URL:-}
+      - OpenHarvest__Vision__AuthToken=${OPENHARVEST_VISION_AUTHTOKEN:-}
+      # Photo storage directory inside the container. Mount a volume here to
+      # persist photos across container restarts.
+      - OpenHarvest__WalkPhoto__Directory=${OPENHARVEST_PHOTO_DIR:-/app/data/photos}
     depends_on:
       postgres:
         condition: service_healthy

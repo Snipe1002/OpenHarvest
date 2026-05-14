@@ -48,6 +48,67 @@ OpenHarvest has four layers. Each is invisible until you invoke it. A casual use
 
 ---
 
+## Walk Mode
+
+Walk Mode is a phone-driven capture flow for populating a yard's 3D model from real-world structures. The operator opens `/walk-mode` on their phone, taps **Start Walk**, wanders the yard tapping to capture photos and manually entering analog tool readings (e.g. soil-probe pH, moisture meter %, lux), then taps **End Walk**. Every capture auto-stamps GPS + timestamp. A background classification worker sends each photo to a configurable vision-inference endpoint, parses the response into proposals, and surfaces them in a staging review panel at `/walk-mode/<session_id>/review`. The operator promotes or rejects each proposal; promoted captures become entities in the attached garden.
+
+v1 does **not** auto-place — every promotion is an explicit operator decision. v1 does **not** render proposed entities in the 3D scene yet — that's v2 scope. v1 schema already carries `yard_id` on every row so a multi-property future doesn't need a migration.
+
+### Data model
+
+| Table | Purpose |
+|---|---|
+| `yards` | Physical properties. Slug-keyed (`home` is the default seed). Optional centroid lat/lng. |
+| `walk_sessions` | One row per walk. Statuses: `Active`, `Ended`, `Classified`. |
+| `captures` | One row per tap-to-capture. Holds photo storage key, GPS, manual readings (JSONB), status. |
+| `classification_proposals` | One row per AI-proposed entity. Confidence + free-form payload (JSONB). |
+
+### Configuration
+
+| Env var / config key | Default | Purpose |
+|---|---|---|
+| `OPENHARVEST_VISION_URL` / `OpenHarvest:Vision:Url` | unset | Vision-inference endpoint. When unset, captures land in `ClassificationFailed` with a clear message; operators can still promote manually. |
+| `OPENHARVEST_VISION_AUTHTOKEN` / `OpenHarvest:Vision:AuthToken` | unset | Optional bearer token. |
+| `OPENHARVEST_PHOTO_DIR` / `OpenHarvest:WalkPhoto:Directory` | `data/photos` (relative to API content root) | Filesystem-backed photo blob directory. Photos are content-addressed (sha256), so duplicate uploads dedupe. |
+| `OpenHarvest:WalkPhoto:PublicUrlBase` | `/api/v1/walks/photos/` | URL prefix browsers fetch photos back through. Override to front the blobs from a CDN. |
+
+### Vision endpoint contract
+
+The vision-inference service is operator-configured — any HTTP service that follows this contract works. The classification worker POSTs to `<vision_url>/classify`:
+
+**Request** — `multipart/form-data` with:
+- `photo` — image bytes (jpeg/png/webp/heic)
+- `hint` — optional string, currently unused in v1
+
+**Response** — `application/json`:
+
+```json
+{
+  "entities": [
+    {
+      "kind": "raised_bed",
+      "confidence": 0.85,
+      "size_m": { "w": 1.2, "h": 0.3, "d": 2.4 },
+      "plants": ["tomato", "basil"]
+    },
+    { "kind": "container", "confidence": 0.62 }
+  ],
+  "detected_at": "2026-05-14T12:34:56Z"
+}
+```
+
+`kind` is required; everything else is optional and passed through into the proposal's JSON payload so future model versions can add fields without renegotiating the contract.
+
+### What's deferred
+
+- **v1.5** — inline fast classification against a local vision endpoint (2s budget), so high-confidence proposals can land before the operator finishes the walk
+- **v2** — auto-place + ghost entities in the 3D scene + per-yard confidence threshold
+- **v3** — bluetooth/ESP32 probe hardware (re-opens the hardware-tier decision)
+
+See `frontend-v2/src/pages/WalkMode.tsx`, `frontend-v2/src/pages/WalkReview.tsx`, `src/OpenHarvest.API/Controllers/WalksController.cs`, `src/OpenHarvest.API/Controllers/CapturesController.cs`, and `src/OpenHarvest.Infrastructure/AI/ClassificationWorker.cs`.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |

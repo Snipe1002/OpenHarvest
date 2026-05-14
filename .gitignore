@@ -75,6 +75,10 @@ redis-data/
 uploads/
 wwwroot/uploads/
 
+# Walk-mode capture photos (filesystem store) — local dev only
+src/OpenHarvest.API/data/photos/
+data/photos/
+
 # macOS
 .DS_Store
 
