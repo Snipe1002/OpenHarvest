@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using OpenHarvest.Application.Nudges;
 using OpenHarvest.Domain.Interfaces;
 using OpenHarvest.Infrastructure.AI;
@@ -34,6 +35,28 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddScoped<NudgeScanner>();
 
+        // Walk-mode v1 wiring. The photo store is filesystem-by-default so a fresh install can
+        // run without standing up MinIO; admins who already have S3 can override by binding
+        // OpenHarvest:WalkPhotoStore to "minio" later (currently only "filesystem" ships).
+        services.Configure<WalkPhotoStoreOptions>(config.GetSection("OpenHarvest:WalkPhoto"));
+        services.AddSingleton<IHostContentRoot>(sp =>
+        {
+            var env = sp.GetRequiredService<IHostEnvironment>();
+            return new HostContentRootAdapter(env.ContentRootPath);
+        });
+        services.AddSingleton<IWalkPhotoStore, FilesystemWalkPhotoStore>();
+
+        services.Configure<VisionClientOptions>(config.GetSection("OpenHarvest:Vision"));
+        services.AddHttpClient<IVisionClient, VisionClient>();
+
+        services.AddHostedService<ClassificationWorker>();
+
         return services;
+    }
+
+    private sealed class HostContentRootAdapter : IHostContentRoot
+    {
+        public HostContentRootAdapter(string contentRootPath) => ContentRootPath = contentRootPath;
+        public string ContentRootPath { get; }
     }
 }
