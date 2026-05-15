@@ -131,6 +131,17 @@ public class ClassificationWorker : BackgroundService
             capture.ClassifiedUtc = now;
             await db.SaveChangesAsync(ct);
         }
+        catch (VisionTimeoutException)
+        {
+            // The vision endpoint is still processing; we surface that as an explicit
+            // "still processing" state on the capture rather than a hard failure, so the
+            // review panel can show a friendlier message and the operator knows to wait
+            // (or re-trigger by promoting manually).
+            capture.Status = CaptureStatus.ClassificationFailed;
+            capture.ClassificationError = "vision service is still processing — try again shortly";
+            capture.ClassifiedUtc = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+        }
         catch (Exception ex)
         {
             capture.Status = CaptureStatus.ClassificationFailed;
