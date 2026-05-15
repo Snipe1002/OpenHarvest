@@ -271,6 +271,15 @@ public class VisionClient : IVisionClient
         {
             form.Add(new StringContent(hint), "hint");
         }
+        // Pin the worker to its garden-tuned system prompt. As of the
+        // multi-mode refactor (gpu-worker 2026-05-15) the default mode is
+        // `none` — a generic visual-analyst prompt with no domain bias —
+        // and OpenHarvest must opt in to garden mode explicitly to keep
+        // the constrained `kind` enum (raised_bed | plant | container |
+        // structure | unknown) plus `size_m` / `plants` fields. Older
+        // gpu-worker builds (pre-multi-mode) ignore unknown form fields,
+        // so this is forward-only safe.
+        form.Add(new StringContent("garden"), "mode");
 
         using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = form };
         if (!string.IsNullOrWhiteSpace(_opts.AuthToken))
