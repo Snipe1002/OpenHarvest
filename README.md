@@ -74,34 +74,48 @@ v1 does **not** auto-place — every promotion is an explicit operator decision.
 
 ### Vision endpoint contract
 
-The vision-inference service is operator-configured — any HTTP service that follows this contract works. The classification worker POSTs to `<vision_url>/classify`:
+The vision-inference service is operator-configured — any HTTP service that follows this contract works. The classification worker uses an **async job pattern**: submit the photo, get a `job_id` back, then poll for the result. This lets the endpoint take arbitrarily long on full-resolution camera uploads without tying up HTTP connections or proxy idle timeouts.
 
-**Request** — `multipart/form-data` with:
-- `photo` — image bytes (jpeg/png/webp/heic)
+**Submit** — `POST <vision_url>/classify` with `multipart/form-data`:
+- `photo` — image bytes (jpeg/png/webp/heic), no client-side downscaling — full camera resolution is fine
 - `hint` — optional string, currently unused in v1
+- `priority` — optional `"high"` | `"low"` (default `"low"`)
 
-**Response** — `application/json`:
+Auth: `Authorization: Bearer <token>` (configured via `OPENHARVEST_VISION_AUTHTOKEN`).
+
+**Submit response** — `202 Accepted`:
+```json
+{ "ok": true, "job_id": "abc123…", "status_url": "/vision-status/abc123…" }
+```
+
+**Poll** — `GET <vision_url><status_url>` (same bearer auth), at any cadence (the client polls every 1s). Replies one of:
 
 ```json
-{
-  "entities": [
-    {
-      "kind": "raised_bed",
-      "confidence": 0.85,
-      "size_m": { "w": 1.2, "h": 0.3, "d": 2.4 },
-      "plants": ["tomato", "basil"]
-    },
-    { "kind": "container", "confidence": 0.62 }
-  ],
-  "detected_at": "2026-05-14T12:34:56Z"
+{ "ok": true, "status": "queued",  "job_id": "abc123…", "elapsed_s": null }
+{ "ok": true, "status": "running", "job_id": "abc123…", "elapsed_s": 4.2 }
+{ "ok": true, "status": "done",    "job_id": "abc123…", "elapsed_s": 16.4,
+  "result": {
+    "entities": [
+      {
+        "kind": "raised_bed",
+        "confidence": 0.85,
+        "size_m": { "w": 1.2, "h": 0.3 },
+        "plants": ["tomato", "basil"]
+      },
+      { "kind": "container", "confidence": 0.62 }
+    ],
+    "detected_at": "2026-05-14T12:34:56Z"
+  }
 }
+{ "ok": true, "status": "failed",  "job_id": "abc123…", "error": "..." }
 ```
 
 `kind` is required; everything else is optional and passed through into the proposal's JSON payload so future model versions can add fields without renegotiating the contract.
 
+The classification worker waits up to `PollTimeoutSeconds` (default 60s) for a job to reach `done` or `failed`. If the budget is exhausted while the job is still queued/running, the capture is marked `ClassificationFailed` with the message `"vision service is still processing — try again shortly"` so the operator can re-trigger via the staging review panel.
+
 ### What's deferred
 
-- **v1.5** — inline fast classification against a local vision endpoint (2s budget), so high-confidence proposals can land before the operator finishes the walk
 - **v2** — auto-place + ghost entities in the 3D scene + per-yard confidence threshold
 - **v3** — bluetooth/ESP32 probe hardware (re-opens the hardware-tier decision)
 
