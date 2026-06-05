@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// Production builds are served from /openharvest/ on nexus tailnet (canonical URL).
+// Production builds are served from /openharvest/ on the server host (canonical URL).
 // Dev keeps default base '/' so localhost:5174 works unchanged.
 //
 // `define` shims `process.env.NODE_ENV` because @pascal-app/viewer's published

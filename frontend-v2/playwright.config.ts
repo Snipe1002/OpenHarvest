@@ -2,9 +2,9 @@
  * Minimal Playwright config for OpenHarvest v2 smoke tests.
  *
  * Only chromium — we just need a screenshot and a couple of DOM assertions
- * against the deployed `https://nexus.tail1b8bd8.ts.net/openharvest/` URL.
+ * against the deployed `https://your-server.example.com/openharvest/` URL.
  *
- * `ignoreHTTPSErrors: true` because nexus uses Caddy's local CA. Playwright's
+ * `ignoreHTTPSErrors: true` because the server uses Caddy's local CA. Playwright's
  * bundled chromium doesn't trust it by default (same reason the user's
  * regular browsers need the CA installed).
  */
@@ -19,7 +19,7 @@ export default defineConfig({
   reporter: [['list']],
   // 60s per test — WebGPU init alone can eat 8–12s, then the test does its
   // own work + a `fullPage` screenshot which is non-trivial at 1280x720.
-  // Default 30s is borderline and flakes when nexus is cold.
+  // Default 30s is borderline and flakes when the server is cold.
   timeout: 60_000,
   use: {
     ignoreHTTPSErrors: true,

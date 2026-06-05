@@ -6,7 +6,7 @@ import { test, expect, type Page } from '@playwright/test'
  * unreachable (e.g. when running offline).
  */
 test('live scene loads with house and at least one entity', async ({ page }) => {
-  await page.goto('https://nexus.tail1b8bd8.ts.net/openharvest/')
+  await page.goto('https://your-server.example.com/openharvest/')
   await page.waitForSelector('canvas')
   // Pascal's viewer needs longer to compose its first WebGPU frame after the
   // canvas mounts, plus our entities load over HTTPS from the API. 8s gives
@@ -16,7 +16,7 @@ test('live scene loads with house and at least one entity', async ({ page }) => 
 })
 
 test('add toolbar visible', async ({ page }) => {
-  await page.goto('https://nexus.tail1b8bd8.ts.net/openharvest/')
+  await page.goto('https://your-server.example.com/openharvest/')
   await expect(page.getByRole('button', { name: /Bed/i })).toBeVisible()
   await expect(page.getByRole('button', { name: /Plant/i })).toBeVisible()
   await expect(page.getByRole('button', { name: /Prefab/i })).toBeVisible()
@@ -33,7 +33,7 @@ test('add toolbar visible', async ({ page }) => {
 // to ~3KB. The 50KB threshold is comfortably between them.
 // ---------------------------------------------------------------------------
 
-const APP_URL = 'https://nexus.tail1b8bd8.ts.net/openharvest/'
+const APP_URL = 'https://your-server.example.com/openharvest/'
 
 /** Wait long enough for WebGPU init + entities to arrive. Generous on purpose
  *  — these specs are not for measuring perf; they're for verifying the scene

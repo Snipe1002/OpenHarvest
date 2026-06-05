@@ -13,8 +13,8 @@
  */
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
 
-const APP_URL = 'https://nexus.tail1b8bd8.ts.net/openharvest/'
-const API_BASE = 'https://nexus.tail1b8bd8.ts.net/openharvest/api/v1'
+const APP_URL = 'https://your-server.example.com/openharvest/'
+const API_BASE = 'https://your-server.example.com/openharvest/api/v1'
 const WEBGPU_WARMUP_MS = 8000
 const SETTLE_MS = 1500
 

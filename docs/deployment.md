@@ -1,14 +1,14 @@
 # OpenHarvest v2 — Deployment Runbook
 
-> Deploying the Vite SPA to nexus and serving it via Caddy. Also covers
+> Deploying the Vite SPA to the server host and serving it via Caddy. Also covers
 > the load-bearing gotchas that bit us during the v2 launch.
 
 ---
 
 ## What v2 is and where it lives
 
-- **Production URL:** [`https://nexus.tail1b8bd8.ts.net/openharvest/`](https://nexus.tail1b8bd8.ts.net/openharvest/)
-- **Static dist on nexus:** `/opt/homelab/openharvest/`
+- **Production URL:** [`https://your-server.example.com/openharvest/`](https://your-server.example.com/openharvest/)
+- **Static dist on server:** `/opt/homelab/openharvest/`
 - **Reverse proxy / static server:** Caddy in the `vaultwarden` compose
   stack at `/opt/homelab/vaultwarden/`
 - **Backend API (unchanged):** `openharvest-api` container in the
@@ -26,29 +26,29 @@ Caddy is configured to:
 
 ## Deploy command sequence
 
-Run from a Windows shell with `ssh` and `scp` against the `nexus` host
+Run from a Windows shell with `ssh` and `scp` against your server host
 in your SSH config. Five commands, in order:
 
 ```bash
 cd C:\openharvest\frontend-v2
 npm run build
-scp -r dist/* nexus:/tmp/openharvest-dist-tmp/
-ssh nexus 'sudo rm -rf /opt/homelab/openharvest && sudo mkdir -p /opt/homelab/openharvest && sudo cp -r /tmp/openharvest-dist-tmp/* /opt/homelab/openharvest/ && sudo chown -R shayne:shayne /opt/homelab/openharvest && rm -rf /tmp/openharvest-dist-tmp'
-ssh nexus 'cd /opt/homelab/vaultwarden && sudo docker compose up -d --force-recreate caddy'
+scp -r dist/* <your-server>:/tmp/openharvest-dist-tmp/
+ssh <your-server> 'sudo rm -rf /opt/homelab/openharvest && sudo mkdir -p /opt/homelab/openharvest && sudo cp -r /tmp/openharvest-dist-tmp/* /opt/homelab/openharvest/ && sudo chown -R <user>:<user> /opt/homelab/openharvest && rm -rf /tmp/openharvest-dist-tmp'
+ssh <your-server> 'cd /opt/homelab/vaultwarden && sudo docker compose up -d --force-recreate caddy'
 ```
 
 Then verify:
 
 ```bash
 # 200 + HTML body containing "OpenHarvest v2"
-curl -sI https://nexus.tail1b8bd8.ts.net/openharvest/ | head -5
+curl -sI https://your-server.example.com/openharvest/ | head -5
 
 # 200 + JSON array (possibly empty)
-curl -s https://nexus.tail1b8bd8.ts.net/openharvest/api/v1/gardens/ids
+curl -s https://your-server.example.com/openharvest/api/v1/gardens/ids
 
 # 101 (Switching Protocols) on the negotiate handshake — actually returns
 # 200 with a JSON negotiateVersion document
-curl -s https://nexus.tail1b8bd8.ts.net/openharvest/hubs/garden/negotiate?negotiateVersion=1
+curl -s https://your-server.example.com/openharvest/hubs/garden/negotiate?negotiateVersion=1
 ```
 
 ---
@@ -132,7 +132,7 @@ services on this Caddy need their own bind mount **and** their own
 
 ## Caddy block layout
 
-Current block, sanitized, inside the `nexus.tail1b8bd8.ts.net` site
+Current block, sanitized, inside the `your-server.example.com` site
 in `/opt/homelab/vaultwarden/Caddyfile`:
 
 ```caddy
@@ -180,18 +180,18 @@ catch-all for everything under `/openharvest/*`.
 
 ## Homepage tile
 
-The tile on the nexus homepage lives in
+The tile on the server homepage lives in
 `/opt/homelab/homepage/config/services.yaml`. Edit in place — Homepage
 hot-reloads on file change, no restart needed. The tile points at
-`https://nexus.tail1b8bd8.ts.net/openharvest/`.
+`https://your-server.example.com/openharvest/`.
 
 ---
 
-## Backups left on nexus
+## Backups left on server
 
 The deploy script doesn't currently snapshot the dist (it just
 clobbers), but other Caddy / Compose work has left timestamped
-backups. Files you may find lying around on nexus:
+backups. Files you may find lying around on the server:
 
 | Path | What | Safe to delete? |
 |---|---|---|
@@ -209,7 +209,7 @@ embedded `wwwroot`):
 
 1. Restore the prior Caddyfile:
    ```bash
-   ssh nexus 'sudo cp /opt/homelab/vaultwarden/Caddyfile.bak.<latest> /opt/homelab/vaultwarden/Caddyfile'
+   ssh <your-server> 'sudo cp /opt/homelab/vaultwarden/Caddyfile.bak.<latest> /opt/homelab/vaultwarden/Caddyfile'
    ```
    Or hand-edit: replace the four `handle` / `handle_path` /
    `redir` blocks under the `OpenHarvest v2` comment with a single
@@ -224,17 +224,17 @@ embedded `wwwroot`):
 
 2. Optional: clear the static dist so nothing is serving it:
    ```bash
-   ssh nexus 'sudo rm -rf /opt/homelab/openharvest'
+   ssh <your-server> 'sudo rm -rf /opt/homelab/openharvest'
    ```
 
 3. **Force-recreate Caddy** (see Gotcha #1):
    ```bash
-   ssh nexus 'cd /opt/homelab/vaultwarden && sudo docker compose up -d --force-recreate caddy'
+   ssh <your-server> 'cd /opt/homelab/vaultwarden && sudo docker compose up -d --force-recreate caddy'
    ```
 
 4. Verify:
    ```bash
-   curl -sI https://nexus.tail1b8bd8.ts.net/openharvest/
+   curl -sI https://your-server.example.com/openharvest/
    ```
    You should see the v1 PWA response — Babylon.js, no Pascal viewer.
 

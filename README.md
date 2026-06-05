@@ -169,7 +169,7 @@ npm install
 npm run dev
 ```
 
-Then open the printed dev URL (defaults to `http://localhost:5174`). The deployed v2 build lives at [`https://nexus.tail1b8bd8.ts.net/openharvest/`](https://nexus.tail1b8bd8.ts.net/openharvest/) — see [`docs/deployment.md`](docs/deployment.md) for the runbook.
+Then open the printed dev URL (defaults to `http://localhost:5174`). The deployed v2 build lives at `https://<your-server>/openharvest/` — see [`docs/deployment.md`](docs/deployment.md) for the runbook.
 
 See [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) for full setup details and AI provider configuration.
 

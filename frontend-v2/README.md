@@ -6,8 +6,8 @@ v2 of OpenHarvest's frontend. React 19 + Three.js (via React Three Fiber) +
 Pascal Editor's `@pascal-app/viewer` for the building / architecture side.
 Replaces the v1 Babylon.js frontend that still lives at
 `src/OpenHarvest.API/wwwroot/`. As of 2026-04-27 v2 is the canonical UI:
-Caddy on `nexus` serves the Vite SPA dist at
-[`https://nexus.tail1b8bd8.ts.net/openharvest/`](https://nexus.tail1b8bd8.ts.net/openharvest/).
+Caddy on the server host serves the Vite SPA dist at
+[`https://your-server.example.com/openharvest/`](https://your-server.example.com/openharvest/).
 
 ## Architecture in one paragraph
 
@@ -31,16 +31,16 @@ npm run dev
 
 Vite tries port 5174 first (configured in `vite.config.ts`); if that's
 taken it falls back to the next free port automatically. The dev server
-hits the deployed nexus API by default since `VITE_API_BASE` is unset
+hits the deployed server API by default since `VITE_API_BASE` is unset
 locally — set it to point at a different backend if you need to.
 
 For the deployed build, just open
-[`https://nexus.tail1b8bd8.ts.net/openharvest/`](https://nexus.tail1b8bd8.ts.net/openharvest/).
+[`https://your-server.example.com/openharvest/`](https://your-server.example.com/openharvest/).
 
 ## Build / deploy
 
 `npm run build` produces a static SPA in `dist/`. The deployed copy lives
-on `nexus` at `/opt/homelab/openharvest/`, served by Caddy. Full runbook
+on the server host at the configured static path, served by Caddy. Full runbook
 including the load-bearing gotchas (Caddy bind-mount inode caching,
 `uri strip_prefix`, Caddy mount config) is at
 [`../docs/deployment.md`](../docs/deployment.md).
@@ -73,7 +73,7 @@ including the load-bearing gotchas (Caddy bind-mount inode caching,
 - `SampleBuilding` populates Pascal's `useScene` store on first mount
 - Zustand garden store with localStorage persistence of `currentGardenId`
 - Typed REST client and SignalR client wired to live entity upserts / deletes / nudges
-- Production build deploys to nexus at `/openharvest/`
+- Production build deploys to the server host at `/openharvest/`
 
 **Deferred (later milestones):**
 
