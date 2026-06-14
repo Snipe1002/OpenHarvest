@@ -143,4 +143,11 @@ app.MapHub<GardenHub>("/hubs/garden");
 
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok", service = "openharvest-api" }));
 
+// SPA fallback: the v2 frontend is a client-routed single-page app (path-based
+// dispatcher in Router.tsx). Any non-API, non-file GET must return index.html
+// so a hard refresh or deep-link/bookmark to a client route (e.g.
+// /walk-mode, /walk-mode/<id>/review) loads the app instead of 404-ing. API
+// (api/*) and hub (hubs/*) routes are already matched above and take priority.
+app.MapFallbackToFile("index.html");
+
 app.Run();
