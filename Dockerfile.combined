@@ -1,0 +1,42 @@
+# Combined image: OpenHarvest API + the prebuilt v2 SPA served from one container.
+#
+# The v2 frontend (frontend-v2/dist) is built ahead of time with
+# `vite build` (base=/openharvest/) and baked into the API's wwwroot. The API
+# runs with OpenHarvest__PathBase=/openharvest so both the SPA and the
+# api/v1 + hubs routes live under the /openharvest/ prefix, matching the
+# frontend's compiled asset paths and `/openharvest/api/v1` client base.
+#
+# Build context = repo root. Requires frontend-v2/dist/ to exist (committed
+# build artifact is gitignored, so it must be present in the build context —
+# the deploy tarball includes it).
+#
+#   docker build -f Dockerfile.combined -t openharvest-api:latest .
+#
+# This is a deploy artifact; the canonical compose (docker-compose.yml) still
+# builds the API-only image for local dev. Hosting is operator-configured
+# (reverse proxy + DB endpoints via env), nothing host-specific is baked in.
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+COPY OpenHarvest.sln ./
+COPY src/OpenHarvest.Domain/OpenHarvest.Domain.csproj src/OpenHarvest.Domain/
+COPY src/OpenHarvest.Application/OpenHarvest.Application.csproj src/OpenHarvest.Application/
+COPY src/OpenHarvest.Infrastructure/OpenHarvest.Infrastructure.csproj src/OpenHarvest.Infrastructure/
+COPY src/OpenHarvest.API/OpenHarvest.API.csproj src/OpenHarvest.API/
+COPY src/OpenHarvest.Worker/OpenHarvest.Worker.csproj src/OpenHarvest.Worker/
+RUN dotnet restore src/OpenHarvest.API/OpenHarvest.API.csproj
+
+COPY src/ src/
+# Swap the in-source v1 wwwroot for the prebuilt v2 SPA dist before publish so
+# the published image serves the v2 frontend (drop the stale v1 assets first).
+RUN rm -rf src/OpenHarvest.API/wwwroot && mkdir -p src/OpenHarvest.API/wwwroot
+COPY frontend-v2/dist/ src/OpenHarvest.API/wwwroot/
+RUN dotnet publish src/OpenHarvest.API/OpenHarvest.API.csproj -c Release -o /app /p:UseAppHost=false
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+WORKDIR /app
+COPY --from=build /app ./
+EXPOSE 5000
+ENV ASPNETCORE_URLS=http://+:5000
+ENTRYPOINT ["dotnet", "OpenHarvest.API.dll"]
