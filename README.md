@@ -74,12 +74,15 @@ v1 does **not** auto-place — every promotion is an explicit operator decision.
 
 ### Vision endpoint contract
 
-The vision-inference service is operator-configured — any HTTP service that follows this contract works. The classification worker uses an **async job pattern**: submit the photo, get a `job_id` back, then poll for the result. This lets the endpoint take arbitrarily long on full-resolution camera uploads without tying up HTTP connections or proxy idle timeouts.
+The vision-inference service is operator-configured — any HTTP service that follows this contract works. It can be a single model server **or an async job router / queue front** that load-balances across several model workers; the contract is identical either way because the client never assumes a topology — it only submits and polls. The classification worker uses an **async job pattern**: submit the photo, get a `job_id` back, then poll for the result. This lets the endpoint take arbitrarily long on full-resolution camera uploads (or queue the job behind other work) without tying up HTTP connections or proxy idle timeouts.
 
 **Submit** — `POST <vision_url>/classify` with `multipart/form-data`:
 - `photo` — image bytes (jpeg/png/webp/heic), no client-side downscaling — full camera resolution is fine
 - `hint` — optional string, currently unused in v1
+- `mode` / `template` — optional string selecting the prompt/schema the endpoint applies (the client pins `garden`). A server free to ignore it falls back to its default.
 - `priority` — optional `"high"` | `"low"` (default `"low"`)
+
+The returned `status_url` is **endpoint-defined** — the client treats it as opaque and resolves it relative to `<vision_url>` (or uses it verbatim if absolute). A queue front may hand back a path under its own routing prefix; that is fine.
 
 Auth: `Authorization: Bearer <token>` (configured via `OPENHARVEST_VISION_AUTHTOKEN`).
 
