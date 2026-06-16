@@ -18,6 +18,7 @@ import LabelsChip from './components/LabelsChip'
 import MainToolbar from './components/MainToolbar'
 import MultiChip from './components/MultiChip'
 import MultiSelectInspector from './components/MultiSelectInspector'
+import RenderKickstart from './components/RenderKickstart'
 import SceneGrid from './components/SceneGrid'
 import R3FSceneBridge from './components/r3fSceneBridge'
 import RegionPaint from './components/RegionPaint'
@@ -218,6 +219,11 @@ export default function App() {
     <div style={{ width: '100vw', height: '100vh' }}>
       <SampleBuilding />
       <Viewer selectionManager="custom">
+        {/* Forces the Canvas to paint: the Pascal Viewer hardcodes
+            frameloop="never" + an async WebGPU gl factory, so the populated
+            scene never gets a first frame. RenderKickstart flips the loop to
+            "always" + invalidates once the renderer is live. */}
+        <RenderKickstart />
         {/* Camera orbit is suspended while the user is dragging an entity in
             single OR group translate mode, mid-region-paint-drag, OR mid-
             button-drag (finger pressed on an inspector ⇄ button as the drag
