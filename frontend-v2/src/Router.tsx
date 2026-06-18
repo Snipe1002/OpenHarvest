@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import App from './App'
 import WalkMode from './pages/WalkMode'
 import WalkReview from './pages/WalkReview'
+import WebGPUGate from './components/WebGPUGate'
 
 function currentPath(): string {
   // Strip the Vite base path so route matching is independent of deploy URL.
@@ -67,5 +68,12 @@ export default function Router() {
   if (/^\/walk-mode\/?$/.test(path)) {
     return <WalkMode />
   }
-  return <App />
+  // The 3D scene (App) needs WebGPU; gate it so no-WebGPU browsers get an
+  // actionable message instead of a silently-blank canvas. Walk-mode routes
+  // above are camera-only and stay ungated.
+  return (
+    <WebGPUGate>
+      <App />
+    </WebGPUGate>
+  )
 }
